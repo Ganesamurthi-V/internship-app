@@ -175,20 +175,54 @@ Each is commented at the point it occurs. The material ones:
    `documents.deleted_at` and `documents.internship_id`, and the
    `password_reset_tokens`, `export_jobs` and `app_settings` tables.
 
+6. **Push notifications are not implemented at all.** `03_TechSpec.md` §3.4 and
+   `12_Mobile_App_Spec.md` §7 specify Expo Push → FCM/APNs, and `08_Implementation_Plan.md`
+   lists it in phases 1, 2, 4 and 6. The whole delivery path has been removed:
+   the `expo-notifications` and `expo-device` dependencies and the Expo config plugin,
+   `POST`/`GET /api/device-tokens` and `DELETE /api/device-tokens/:token`, the
+   `device_tokens` table, the `DevicePlatform` enum, `notification_logs.delivered_at`,
+   and the `EXPO_PUSH_API_URL` / `EXPO_ACCESS_TOKEN` settings. Migration
+   `20260816000000_remove_push_notifications` drops the database side.
+
+   **The notification feature itself still works.** `02_SRS.md` §4 events are recorded
+   in `notification_logs` by `sendNotification` in `backend/src/lib/notifications.ts`
+   (formerly `lib/push.ts`), and are read through `GET /api/notifications`,
+   `PATCH /api/notifications/:id/read`, `PATCH /api/notifications/read-all` and the
+   unread counter on the student dashboard. What is gone is OS-level delivery, so a
+   student sees a notification when they next open the app rather than on the lock
+   screen. The tap deep-link targets in `NOTIFICATIONS` are kept as in-app screen paths.
+
+   Restoring push means re-adding the client dependency, a `device_tokens` table and a
+   delivery call at the end of `sendNotification`. Note that remote push cannot be
+   tested in Expo Go at all since SDK 53 — it needs a development build.
+
 ## Known gaps
 
-- **No mail provider.** `src/lib/mailer.ts` defines the seam and logs the message body
-  in development. Password reset and mentor invite links therefore appear in the server
-  log rather than an inbox. `sendMail` refuses to fall back to logging in production.
+- **Transactional mail is Supabase's.** There is no local mail provider and no
+  `src/lib/mailer.ts`; password reset and email confirmation are sent by Supabase Auth
+  using the templates configured in the project dashboard. The rate limits and sender
+  address are therefore configured there, not in this repo. Mentor invites still need a
+  decision: they are not a Supabase Auth flow.
 - **Rate limiting is in-process.** Correct for one instance; on a multi-instance or
   serverless deployment each instance keeps its own counters. Implement
-  `RateLimitStore` against Redis and pass it to `setRateLimitStore`. Account lockout is
-  unaffected — it lives in `users.failed_login_attempts`, which is shared.
+  `RateLimitStore` against Redis and pass it to `setRateLimitStore` in
+  `src/lib/rateLimit.ts`. Note this now covers only the app's own endpoints — repeated
+  bad-password attempts are throttled and locked out by Supabase Auth, so the
+  `users.failed_login_attempts` column described in the documents no longer exists.
 - **No integration or E2E tests.** Requires a live database; see below.
 - **Offline database is not encrypted.** `07_Security_and_Privacy.md` §3.4 asks for
   SQLCipher. `expo-sqlite` does not bundle it, so the local drafts are unencrypted at
   rest. Exposure is bounded by design — drafts hold attendance and work-log text, never
   tokens, passwords or document bytes — but it is a real gap against the spec.
+- **Auth tokens are held in memory, not the Keychain/Keystore.**
+  `07_Security_and_Privacy.md` §3.1 specifies `expo-secure-store`. Two options were
+  tried and rejected: SecureStore caps a single value at 2048 bytes and a Supabase
+  session exceeds that, so writes failed silently and login appeared to succeed then
+  immediately sign out; `@react-native-async-storage/async-storage` v3 throws
+  `Native module is null` in Expo Go. The adapter in `apps/mobile/lib/supabase.ts` is
+  therefore a plain `Map`. **Consequence: the session is lost when the app is fully
+  killed, though it survives hot reload.** Before shipping, swap in either a SecureStore
+  adapter that chunks the value across several keys, or AsyncStorage v2 in a dev build.
 - **Offline store is expo-sqlite, not WatermelonDB.** The documents recommend
   WatermelonDB; it relies on a JSI adapter plus a community Expo config plugin and has
   known friction with React Native's New Architecture, which is the default in RN 0.86.

@@ -62,12 +62,6 @@ enum ClientPlatform {
   web
 }
 
-/// Push notifications only ever target real devices, never the web portal.
-enum DevicePlatform {
-  ios
-  android
-}
-
 enum InternshipDomain {
   software_development
   data_science_ai_ml
@@ -192,7 +186,6 @@ model User {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  deviceTokens        DeviceToken[]
   student             Student?
   mentor              Mentor?
   documents           Document[]
@@ -207,24 +200,6 @@ model User {
   @@index([authId])
   @@index([role, status])
   @@map("users")
-}
-
-model DeviceToken {
-  id String @id @default(uuid()) @db.Uuid
-
-  userId String @map("user_id") @db.Uuid
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  expoPushToken String         @map("expo_push_token")
-  platform      DevicePlatform
-  appVersion    String?        @map("app_version")
-
-  lastActiveAt DateTime @default(now()) @map("last_active_at") @db.Timestamptz(6)
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  @@unique([userId, expoPushToken])
-  @@index([userId])
-  @@map("device_tokens")
 }
 
 // =============================================================================
@@ -745,13 +720,12 @@ model NotificationLog {
   title String
   body  String?
 
-  /// Payload for deep-linking on tap. Never contains student names or record
+  /// In-app screen path for the tap target. Never contains student names or record
   /// details (07_Security_and_Privacy §7).
   data Json?
 
-  deliveredAt DateTime? @map("delivered_at") @db.Timestamptz(6)
-  readAt      DateTime? @map("read_at") @db.Timestamptz(6)
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([userId, readAt])
   @@index([createdAt])

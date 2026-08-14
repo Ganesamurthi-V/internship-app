@@ -28,7 +28,6 @@ export const logger = pino({
       'storageKey',
       'uploadUrl',
       'downloadUrl',
-      'expoPushToken',
       'req.headers.authorization',
       'req.headers.cookie',
       '*.password',

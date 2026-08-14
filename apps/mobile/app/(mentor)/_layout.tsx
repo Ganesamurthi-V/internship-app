@@ -7,7 +7,10 @@ export default function MentorLayout() {
   const role = useAuthStore((state) => state.user?.role);
 
   if (!isAuthenticated) return <Redirect href="/(auth)/login" />;
-  if (role && role !== 'mentor') return <Redirect href="/" />;
+
+  // Redirect to the concrete dashboard rather than "/" to avoid a redirect loop.
+  if (role === 'student') return <Redirect href="/(student)/dashboard" />;
+  if (role === 'faculty' || role === 'admin') return <Redirect href="/(faculty)/dashboard" />;
 
   return (
     <Stack

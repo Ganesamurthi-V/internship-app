@@ -29,10 +29,6 @@ export type UserStatus = (typeof USER_STATUSES)[number];
 export const CLIENT_PLATFORMS = ['ios', 'android', 'web'] as const;
 export type ClientPlatform = (typeof CLIENT_PLATFORMS)[number];
 
-/** Push notifications only target real devices, never the web portal. */
-export const DEVICE_PLATFORMS = ['ios', 'android'] as const;
-export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
-
 // ---------------------------------------------------------------------------
 // Internship
 // ---------------------------------------------------------------------------

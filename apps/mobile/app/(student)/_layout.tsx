@@ -33,8 +33,12 @@ export default function StudentLayout() {
   const role = useAuthStore((state) => state.user?.role);
 
   if (!isAuthenticated) return <Redirect href="/(auth)/login" />;
-  // An admin or faculty member reaching this group is sent to their own dashboard.
-  if (role && role !== 'student') return <Redirect href="/" />;
+
+  // A staff or mentor account landing here goes straight to its own dashboard.
+  // Redirecting to "/" instead would bounce back through the launch router and can
+  // loop if the role and the group ever disagree.
+  if (role === 'faculty' || role === 'admin') return <Redirect href="/(faculty)/dashboard" />;
+  if (role === 'mentor') return <Redirect href="/(mentor)/dashboard" />;
 
   return (
     <Tabs

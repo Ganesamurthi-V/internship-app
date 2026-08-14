@@ -1,17 +1,17 @@
 /**
- * Final assessment and skill self-ratings — 01_PRD §4.5/§4.6, 02_SRS §2.5.
+ * Final assessment and skill self-ratings â€” 01_PRD Â§4.5/Â§4.6, 02_SRS Â§2.5.
  *
  * Three rules drive this module:
  *
- *  1. Unlock (02_SRS §2.5): "Unlocked when internship end date is reached OR faculty
+ *  1. Unlock (02_SRS Â§2.5): "Unlocked when internship end date is reached OR faculty
  *     manually enables early access." Both conditions are checked server-side, so a
  *     client cannot open the form early by ignoring the flag.
  *
  *  2. Immutability: "Cannot be re-submitted after final submission unless
  *     faculty/admin reopens." `submitted_at` is the lock; reopening clears it and is
- *     audited as a High-sensitivity event (07_Security_and_Privacy §9).
+ *     audited as a High-sensitivity event (07_Security_and_Privacy Â§9).
  *
- *  3. Auto-filled totals (01_PRD §4.5): days attended and hours come from attendance
+ *  3. Auto-filled totals (01_PRD Â§4.5): days attended and hours come from attendance
  *     aggregation, not from the student. They are recomputed at submit time so the
  *     stored evidence matches the attendance record exactly.
  */
@@ -27,7 +27,7 @@ import { prisma } from '@/lib/prisma';
 import { today } from '@/lib/clock';
 import { conflict, forbidden, notFound } from '@/lib/errors';
 import { recordAudit } from '@/lib/audit';
-import { NOTIFICATIONS, sendNotification } from '@/lib/push';
+import { NOTIFICATIONS, sendNotification } from '@/lib/notifications';
 import { serializeFinalAssessment, toDateOnly } from '@/lib/serialize';
 import type { AuthContext } from '@/lib/auth/context';
 import { isStaff } from '@/lib/auth/guards';
@@ -115,7 +115,7 @@ function resolveAccess(context: AssessmentContext): FinalAssessmentAccess {
 }
 
 /**
- * Read model for the three-part form (06_App_Flow §6).
+ * Read model for the three-part form (06_App_Flow Â§6).
  *
  * Returns the access state alongside the record so the app can render a locked view
  * without a second round trip, and the auto-filled totals so part 1 shows real
@@ -149,8 +149,8 @@ export async function getFinalAssessmentDetail(
 /**
  * Guards a student write.
  *
- * Staff bypass the unlock gate — a faculty member correcting a record should not
- * have to unlock it for themselves first — but they cannot bypass the audit trail.
+ * Staff bypass the unlock gate â€” a faculty member correcting a record should not
+ * have to unlock it for themselves first â€” but they cannot bypass the audit trail.
  */
 function assertWritable(auth: AuthContext, context: AssessmentContext): void {
   if (isStaff(auth)) return;
@@ -192,7 +192,7 @@ export async function upsertFinalAssessment(
 
   const data = {
     completedSuccessfully: input.completedSuccessfully ?? null,
-    // Auto-filled from attendance, never from the request (01_PRD §4.5).
+    // Auto-filled from attendance, never from the request (01_PRD Â§4.5).
     totalDaysAttended: summary.daysAttended,
     totalHours: summary.totalHours,
     majorProject: input.majorProject ?? null,
@@ -245,7 +245,7 @@ export async function upsertFinalAssessment(
  *
  * `submitFinalAssessmentSchema` has already checked that all eight skills are rated
  * and the required fields are present, so this writes the complete record, stamps
- * `submitted_at`, and marks the internship completed — which is what moves the
+ * `submitted_at`, and marks the internship completed â€” which is what moves the
  * student out of the faculty's active list.
  */
 export async function submitFinalAssessment(
@@ -294,7 +294,7 @@ export async function submitFinalAssessment(
       })),
     });
 
-    // The internship is now finished; 06_App_Flow §6 has faculty notified and the
+    // The internship is now finished; 06_App_Flow Â§6 has faculty notified and the
     // dashboard updated off the back of this.
     await tx.internship.update({
       where: { id: internshipId },
@@ -326,10 +326,10 @@ export async function submitFinalAssessment(
 }
 
 /**
- * Faculty unlock — serves both documented purposes of
+ * Faculty unlock â€” serves both documented purposes of
  * `POST /api/final-assessment/:id/unlock`:
  *
- *   - early access before the end date (02_SRS §2.5), and
+ *   - early access before the end date (02_SRS Â§2.5), and
  *   - reopening an already-submitted assessment for correction.
  *
  * Reopening clears `submitted_at` and returns the internship to `active`, otherwise

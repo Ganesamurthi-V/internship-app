@@ -64,12 +64,6 @@
         }
       ],
       [
-        "expo-notifications",
-        {
-          "color": "#1e3a5f"
-        }
-      ],
-      [
         "expo-build-properties",
         {
           "ios": {

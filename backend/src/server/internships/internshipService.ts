@@ -1,5 +1,5 @@
 /**
- * Internship registration and approval — 01_PRD §4.1, 02_SRS §2.1, 06_App_Flow §3.
+ * Internship registration and approval â€” 01_PRD Â§4.1, 02_SRS Â§2.1, 06_App_Flow Â§3.
  *
  * Business rules enforced here:
  *   - `end_date >= start_date`, and working hours per day positive (also CHECK
@@ -8,7 +8,7 @@
  *   - One active internship per student, unless the institution overrides it.
  *   - Registration cannot be submitted without the offer letter and joining proof.
  *   - Approval and rejection are faculty/admin only and both are audited as
- *     High-sensitivity events (07_Security_and_Privacy §9).
+ *     High-sensitivity events (07_Security_and_Privacy Â§9).
  */
 
 import type { CreateInternshipInput, UpdateInternshipInput } from '@ims/shared-validation';
@@ -20,7 +20,7 @@ import { env } from '@/lib/env';
 import { conflict, forbidden, notFound, validationError } from '@/lib/errors';
 import { toDateColumn } from '@/lib/clock';
 import { recordAudit, buildDiff } from '@/lib/audit';
-import { NOTIFICATIONS, sendNotification } from '@/lib/push';
+import { NOTIFICATIONS, sendNotification } from '@/lib/notifications';
 import type { AuthContext } from '@/lib/auth/context';
 import { isAdmin } from '@/lib/auth/guards';
 
@@ -72,7 +72,7 @@ const OCCUPYING_STATUSES: Prisma.EnumInternshipStatusFilter = {
 
 /**
  * `duration_days` mirrors the document's generated column, which is
- * `end_date - start_date` — an exclusive span. `calculateInternshipDuration`
+ * `end_date - start_date` â€” an exclusive span. `calculateInternshipDuration`
  * returns the inclusive figures users see; the two are intentionally different and
  * the CHECK constraint pins this one to the subtraction.
  */
@@ -199,8 +199,8 @@ export async function updateInternship(
 /**
  * Submits the registration for approval.
  *
- * 01_PRD §4.1 requires the offer/confirmation letter and the joining proof, so the
- * gate is checked here rather than trusting the wizard's own step-3 validation —
+ * 01_PRD Â§4.1 requires the offer/confirmation letter and the joining proof, so the
+ * gate is checked here rather than trusting the wizard's own step-3 validation â€”
  * the client could skip it.
  */
 export async function submitInternship(auth: AuthContext, internshipId: string) {
@@ -289,7 +289,7 @@ export async function approveInternship(
     actorUserId: auth.userId,
     context: auth.request,
     metadata: { note },
-    // High sensitivity per 07_Security_and_Privacy §9.
+    // High sensitivity per 07_Security_and_Privacy Â§9.
     strict: true,
   });
 
@@ -339,7 +339,7 @@ export async function rejectInternship(
  *
  * Upsert by name means two students at the same company converge on one
  * organisation row, which is what makes the organisation-wise statistics in
- * 02_SRS §7 meaningful.
+ * 02_SRS Â§7 meaningful.
  */
 async function resolveOrganisation(input: {
   organisationId?: string | null | undefined;

@@ -17,7 +17,6 @@ import type {
   ClientPlatform,
   CompletionStatus,
   DeliverableType,
-  DevicePlatform,
   DocumentType,
   InternshipDomain,
   InternshipMode,
@@ -71,16 +70,6 @@ export interface AuthenticatedUser {
   mentorId?: Uuid;
   /** Present only for role === 'student' when an internship exists. */
   activeInternshipId?: Uuid | null;
-}
-
-export interface DeviceToken {
-  id: Uuid;
-  userId: Uuid;
-  expoPushToken: string;
-  platform: DevicePlatform;
-  appVersion: string | null;
-  lastActiveAt: Timestamp;
-  createdAt: Timestamp;
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +425,6 @@ export interface NotificationLog {
   type: NotificationType;
   title: string;
   body: string | null;
-  deliveredAt: Timestamp | null;
   readAt: Timestamp | null;
   createdAt: Timestamp;
 }

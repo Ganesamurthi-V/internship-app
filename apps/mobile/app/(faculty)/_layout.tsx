@@ -11,7 +11,10 @@ export default function FacultyLayout() {
   const role = useAuthStore((state) => state.user?.role);
 
   if (!isAuthenticated) return <Redirect href="/(auth)/login" />;
-  if (role && role !== 'faculty' && role !== 'admin') return <Redirect href="/" />;
+
+  // Redirect to the concrete dashboard rather than "/" to avoid a redirect loop.
+  if (role === 'student') return <Redirect href="/(student)/dashboard" />;
+  if (role === 'mentor') return <Redirect href="/(mentor)/dashboard" />;
 
   return (
     <Stack

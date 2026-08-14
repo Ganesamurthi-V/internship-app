@@ -60,9 +60,6 @@ const envSchema = z.object({
       { message: 'INSTITUTION_TIMEZONE must be a valid IANA timezone.' },
     ),
 
-  EXPO_PUSH_API_URL: z.string().url().default('https://exp.host/--/api/v2/push/send'),
-  EXPO_ACCESS_TOKEN: z.string().optional(),
-
   REDIS_URL: z.string().optional(),
   CRON_SECRET: z.string().optional(),
 

@@ -3,7 +3,7 @@
  */
 
 import { z } from 'zod';
-import { CLIENT_PLATFORMS, DEVICE_PLATFORMS } from '@ims/shared-types';
+import { CLIENT_PLATFORMS } from '@ims/shared-types';
 import { emailSchema, loginPasswordSchema, passwordSchema } from './common';
 
 export const loginSchema = z.object({
@@ -60,22 +60,6 @@ export const changePasswordSchema = z
     path: ['password'],
   });
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
-
-/**
- * Expo push tokens look like `ExponentPushToken[xxxxxxxx]` in the managed
- * workflow, but bare FCM/APNs tokens appear in bare/dev builds. The format check
- * stays permissive; delivery failure is handled by pruning dead tokens instead.
- */
-export const registerDeviceTokenSchema = z.object({
-  expoPushToken: z
-    .string()
-    .trim()
-    .min(10, { message: 'Push token is not valid.' })
-    .max(500, { message: 'Push token is not valid.' }),
-  platform: z.enum(DEVICE_PLATFORMS),
-  appVersion: z.string().trim().max(32).optional(),
-});
-export type RegisterDeviceTokenInput = z.infer<typeof registerDeviceTokenSchema>;
 
 /**
  * Client context headers, recorded on audit rows (02_SRS §6).

@@ -1,5 +1,5 @@
 /**
- * Document lifecycle — 03_TechSpec §6, 07_Security_and_Privacy §4.
+ * Document lifecycle â€” 03_TechSpec Â§6, 07_Security_and_Privacy Â§4.
  *
  * The two-call upload handshake:
  *   1. `requestUploadUrl` validates the claimed file, mints a random storage key
@@ -13,7 +13,7 @@
  *
  *  - The storage key is a random UUID under an owner prefix, never derived from the
  *    filename. That neutralises `../../../etc/passwd.pdf` by construction rather
- *    than by sanitising, which is what 09_Test_Plan §6 asks for.
+ *    than by sanitising, which is what 09_Test_Plan Â§6 asks for.
  *
  *  - `completeUpload` trusts storage, not the client, for size and MIME. Otherwise a
  *    client could claim a 1 KB PDF, upload a 9 MB image, and leave a row whose
@@ -28,7 +28,7 @@ import { env } from '@/lib/env';
 import { conflict, forbidden, notFound, validationError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { recordAudit } from '@/lib/audit';
-import { NOTIFICATIONS, sendNotification } from '@/lib/push';
+import { NOTIFICATIONS, sendNotification } from '@/lib/notifications';
 import { serializeDocument } from '@/lib/serialize';
 import type { AuthContext } from '@/lib/auth/context';
 import { assertInternshipAccess, isAdmin, isStaff } from '@/lib/auth/guards';
@@ -215,7 +215,7 @@ async function authorizeDocument(
 
   if (!document || document.deletedAt) {
     // A soft-deleted document is gone as far as the API is concerned
-    // (07_Security_and_Privacy §4).
+    // (07_Security_and_Privacy Â§4).
     throw notFound('Document not found.');
   }
 
@@ -251,12 +251,12 @@ export async function getDocumentDownload(auth: AuthContext, documentId: string)
 }
 
 /**
- * Two-phase delete, per 07_Security_and_Privacy §4: "storage key marked `deleted`;
+ * Two-phase delete, per 07_Security_and_Privacy Â§4: "storage key marked `deleted`;
  * S3 object deleted asynchronously; presigned URLs for that key will 404."
  *
  * The row is marked first so the document becomes unreachable immediately even if
  * object removal fails. A failed removal leaves an orphaned object, which is a
- * housekeeping problem rather than a data exposure — the key is unguessable and no
+ * housekeeping problem rather than a data exposure â€” the key is unguessable and no
  * new URL can be minted for it.
  */
 export async function deleteDocument(auth: AuthContext, documentId: string): Promise<void> {
@@ -279,7 +279,7 @@ export async function deleteDocument(auth: AuthContext, documentId: string): Pro
     actorUserId: auth.userId,
     context: auth.request,
     metadata: { documentType: document.documentType, storageKeyRemoved: true },
-    // High sensitivity per 07_Security_and_Privacy §9.
+    // High sensitivity per 07_Security_and_Privacy Â§9.
     strict: true,
   });
 
@@ -349,9 +349,9 @@ export async function rejectDocument(
     metadata: { documentType: document.documentType, rejectionReason },
   });
 
-  // 02_SRS §4: a rejection notifies the student so they can re-upload. The body
-  // deliberately omits the reason — the app fetches it over the authenticated API
-  // (07_Security_and_Privacy §7).
+  // 02_SRS Â§4: a rejection notifies the student so they can re-upload. The body
+  // deliberately omits the reason â€” the app fetches it over the authenticated API
+  // (07_Security_and_Privacy Â§7).
   await sendNotification({
     ...NOTIFICATIONS.documentRejected(),
     userId: document.ownerUserId,

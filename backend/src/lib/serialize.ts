@@ -547,7 +547,6 @@ type NotificationRow = {
   type: string;
   title: string;
   body: string | null;
-  deliveredAt: Date | null;
   readAt: Date | null;
   createdAt: Date;
 };
@@ -559,7 +558,6 @@ export function serializeNotification(row: NotificationRow): NotificationLog {
     type: row.type as NotificationLog['type'],
     title: row.title,
     body: row.body,
-    deliveredAt: toIso(row.deliveredAt),
     readAt: toIso(row.readAt),
     createdAt: toRequiredIso(row.createdAt),
   };

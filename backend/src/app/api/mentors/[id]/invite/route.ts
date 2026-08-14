@@ -1,9 +1,9 @@
 /**
- * POST /api/mentors/:id/invite — issue a secure invite link (faculty/admin).
+ * POST /api/mentors/:id/invite â€” issue a secure invite link (faculty/admin).
  *
  * 08_Implementation_Plan Phase 5, step 1. The response includes the invite URL so
  * faculty can copy it and share it out of band when email delivery is not
- * configured — which, given `mailer.ts` has no provider wired, is the current
+ * configured â€” which, given `mailer.ts` has no provider wired, is the current
  * default. That is why this returns the URL rather than only a confirmation.
  *
  * Also notifies the mentor by push if they already have an account and a device.
@@ -15,7 +15,7 @@ import { ok, parseJson, uuidRouteParam, withErrorHandling, type RouteContext } f
 import { requireAuth } from '@/lib/auth/context';
 import { requireRole } from '@/lib/auth/guards';
 import { prisma } from '@/lib/prisma';
-import { NOTIFICATIONS, sendNotification } from '@/lib/push';
+import { NOTIFICATIONS, sendNotification } from '@/lib/notifications';
 import { createMentorInvite } from '@/server/mentors/inviteService';
 
 export const POST = withErrorHandling(async (request: NextRequest, context: RouteContext) => {

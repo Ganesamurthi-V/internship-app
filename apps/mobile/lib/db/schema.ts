@@ -49,7 +49,6 @@ export type LocalSyncStatus = 'pending' | 'synced' | 'error';
 export const MIGRATIONS: readonly string[] = [
   // -- 0 -> 1 ---------------------------------------------------------------
   `
-  PRAGMA journal_mode = WAL;
 
   CREATE TABLE IF NOT EXISTS attendance_drafts (
     -- Device-generated UUID. This is the idempotency key the server dedups on, so it

@@ -1,18 +1,23 @@
 /**
- * Root layout — simplified to avoid crashes on load.
+ * Root layout.
  *
- * Heavy modules (sync engine, notifications, SQLite) are loaded lazily after the
- * initial render, so a missing native module doesn't crash the splash screen.
+ * Runs the launch-time session restore and holds the splash screen until it
+ * settles, so the user never sees a flash of login before being routed to their
+ * dashboard.
+ *
+ * Heavy native modules (SQLite, NetInfo) are loaded lazily rather than at module
+ * scope — in Expo Go some of them are unavailable, and importing them eagerly here
+ * took the whole app down before the first render.
  */
 
 import { useEffect, useState } from 'react';
-import { Stack, router } from 'expo-router';
+import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Platform, Text, View } from 'react-native';
 import { colors } from '@/constants/theme';
+import { useAuthStore } from '@/stores/authStore';
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -20,65 +25,62 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 30_000,
+      // 4xx will not succeed on a retry; only retry transport failures.
       retry: (failureCount, error: unknown) => {
         const status = (error as { status?: number } | null)?.status ?? 0;
         if (status >= 400 && status < 500) return false;
         return failureCount < 2;
       },
     },
+    mutations: {
+      // Attendance and work-log writes are idempotent by clientId and go through
+      // the offline queue; a blind retry here could create a duplicate.
+      retry: false,
+    },
   },
 });
 
 export default function RootLayout() {
-  const [isReady, setIsReady] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const bootstrap = useAuthStore((state) => state.bootstrap);
+  const isBootstrapping = useAuthStore((state) => state.isBootstrapping);
+  const [syncStarted, setSyncStarted] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const init = async () => {
-      try {
-        // Dynamically import to avoid crashes if native modules aren't available
-        const { getSupabase } = await import('@/lib/supabase');
-        const supabase = getSupabase();
-        const { data: { session } } = await supabase.auth.getSession();
-
-        if (!cancelled) {
-          setIsAuthenticated(session !== null);
-        }
-      } catch (error) {
-        console.log('Bootstrap error:', error);
-        if (!cancelled) {
-          setIsAuthenticated(false);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsReady(true);
-          void SplashScreen.hideAsync();
-        }
-      }
-    };
-
-    // Safety timeout — never stay stuck on splash
+    // Never leave the user on a blank splash screen if the session check stalls.
     const timeout = setTimeout(() => {
-      if (!cancelled && !isReady) {
-        setIsReady(true);
-        setIsAuthenticated(false);
-        void SplashScreen.hideAsync();
+      if (useAuthStore.getState().isBootstrapping) {
+        useAuthStore.setState({ isBootstrapping: false, isAuthenticated: false, user: null });
       }
-    }, 4000);
+    }, 6000);
 
-    void init();
+    void bootstrap().finally(() => clearTimeout(timeout));
 
-    return () => {
-      cancelled = true;
-      clearTimeout(timeout);
-    };
-  }, []);
+    return () => clearTimeout(timeout);
+  }, [bootstrap]);
 
-  if (!isReady) {
-    return null; // Splash screen is still showing
-  }
+  useEffect(() => {
+    if (isBootstrapping) return;
+    void SplashScreen.hideAsync();
+  }, [isBootstrapping]);
+
+  // Start the offline sync engine after the first render, and only once. It pulls
+  // in SQLite and NetInfo, so a failure here must not prevent the app rendering.
+  useEffect(() => {
+    if (isBootstrapping || syncStarted) return;
+    setSyncStarted(true);
+
+    void (async () => {
+      try {
+        const { useSyncStore } = await import('@/stores/syncStore');
+        useSyncStore.getState().start();
+      } catch {
+        // Offline support unavailable in this runtime; the app still works online.
+      }
+    })();
+  }, [isBootstrapping, syncStarted]);
+
+  // Splash screen is still up; rendering a tree here would only be redirected away.
+  if (isBootstrapping) return null;
 
   return (
     <SafeAreaProvider>

@@ -1,33 +1,55 @@
 /**
- * Auth store — uses Supabase Auth directly.
+ * Auth store — the single source of truth for authentication state.
  *
- * No custom token storage, no refresh interceptor, no session rotation logic.
- * Supabase's SDK handles all of that internally, persisting tokens in
- * expo-secure-store via the adapter in lib/supabase.ts.
+ * Every route guard, the root layout and the launch router all read from here.
+ * That matters: an earlier version had the login screen talking to Supabase
+ * directly while the group layouts read this store, so the store stayed empty and
+ * every guard bounced the user straight back to login in an infinite loop.
  *
- * The store holds the application user identity (role, name, student/mentor IDs)
- * which comes from our backend's GET /api/auth/me after Supabase validates the JWT.
+ * Supabase owns the tokens; this store owns the *application* identity (role,
+ * student/mentor ids) that the guards and dashboards need.
  */
 
 import { create } from 'zustand';
-import type { AuthenticatedUser } from '@ims/shared-types';
+import type { AuthenticatedUser, UserRole } from '@ims/shared-types';
 import { getSupabase } from '@/lib/supabase';
 import { api } from '@/lib/api/client';
-import { clearLocalData } from '@/lib/db/database';
-import { registerForPushNotifications, unregisterPushToken } from '@/lib/notifications/register';
 
 interface AuthState {
   user: AuthenticatedUser | null;
   isAuthenticated: boolean;
+  /** True until the launch-time session check settles, so routing can wait. */
   isBootstrapping: boolean;
   isSigningIn: boolean;
   error: string | null;
 
   bootstrap: () => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<UserRole>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   clearError: () => void;
+}
+
+/**
+ * Builds an identity from the Supabase session alone.
+ *
+ * Used when the backend is unreachable. The role comes from `user_metadata`, which
+ * the seed script sets at account creation. This keeps the app usable offline and
+ * during local development when the API server is not running — the alternative
+ * (treating a valid session as signed out) is far more confusing.
+ */
+function identityFromSession(session: {
+  user: { id: string; email?: string | undefined; user_metadata?: Record<string, unknown> };
+}): AuthenticatedUser {
+  const metadata = session.user.user_metadata ?? {};
+  const email = session.user.email ?? '';
+
+  return {
+    id: session.user.id,
+    email,
+    role: ((metadata.role as string) ?? 'student') as UserRole,
+    name: (metadata.name as string) ?? email.split('@')[0] ?? 'User',
+  };
 }
 
 export const useAuthStore = create<AuthState>()((set, get) => ({
@@ -38,62 +60,66 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   error: null,
 
   /**
-   * Launch-time session restore.
-   *
-   * Supabase SDK loads the persisted session from secure store automatically.
-   * We just need to check if a session exists and fetch the user identity.
+   * Launch-time restore. Reads the Supabase session, then enriches it from the
+   * backend when reachable.
    */
   async bootstrap() {
     try {
       const supabase = getSupabase();
-      const { data: { session } } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
       if (!session) {
         set({ isBootstrapping: false, isAuthenticated: false, user: null });
         return;
       }
 
-      // Session exists — try to fetch app identity, but don't block on failure
+      // Enrich from the backend, but a valid session is enough to proceed.
+      let user: AuthenticatedUser;
       try {
-        const user = await api.get<AuthenticatedUser>('/auth/me');
-        set({ user, isAuthenticated: true, isBootstrapping: false });
+        user = await api.get<AuthenticatedUser>('/auth/me');
       } catch {
-        // Backend unreachable but we have a valid Supabase session.
-        // Show as authenticated with minimal info so the app renders.
-        set({
-          user: {
-            id: session.user.id,
-            email: session.user.email ?? '',
-            role: (session.user.user_metadata?.role as string ?? 'student') as AuthenticatedUser['role'],
-            name: session.user.user_metadata?.name as string ?? session.user.email?.split('@')[0] ?? 'User',
-          },
-          isAuthenticated: true,
-          isBootstrapping: false,
-        });
+        user = identityFromSession(session);
       }
+
+      set({ user, isAuthenticated: true, isBootstrapping: false });
     } catch {
-      // No session at all — go to login
       set({ user: null, isAuthenticated: false, isBootstrapping: false });
     }
   },
 
+  /**
+   * Signs in and populates the store.
+   *
+   * Returns the resolved role so the caller can navigate without re-reading state
+   * that React may not have committed yet.
+   */
   async login(email, password) {
     set({ isSigningIn: true, error: null });
+
     try {
       const supabase = getSupabase();
 
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      });
 
-      if (error || !data.session) {
-        throw new Error(error?.message ?? 'Email or password is incorrect.');
+      if (error) throw new Error(error.message);
+      if (!data.session) throw new Error('Signed in but no session was returned.');
+
+      // Backend enrichment is best-effort — never block sign-in on it.
+      let user: AuthenticatedUser;
+      try {
+        user = await api.get<AuthenticatedUser>('/auth/me');
+      } catch {
+        user = identityFromSession(data.session);
       }
 
-      // Fetch the app user identity (role, student/mentor profile)
-      const user = await api.get<AuthenticatedUser>('/auth/me');
-      set({ user, isAuthenticated: true, isSigningIn: false });
+      set({ user, isAuthenticated: true, isSigningIn: false, error: null });
 
-      // Register push token in the background
-      void registerForPushNotifications();
+      return user.role;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not sign in.';
       set({ isSigningIn: false, error: message });
@@ -101,18 +127,24 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     }
   },
 
+  /**
+   * Signs out. Every step is independently guarded so a failure in one does not
+   * leave the user stuck in a half-signed-in state.
+   */
   async logout() {
     try {
-      await unregisterPushToken();
+      await getSupabase().auth.signOut();
     } catch {
-      // Best effort
+      // Signing out locally is still a sign-out.
     }
 
-    const supabase = getSupabase();
-    await supabase.auth.signOut();
-
-    // Clear local offline data — the next user must not see the previous one's drafts
-    await clearLocalData();
+    try {
+      // Drafts belong to the signed-in student; the next user must not see them.
+      const { clearLocalData } = await import('@/lib/db/database');
+      await clearLocalData();
+    } catch {
+      // SQLite may be unavailable; not a reason to block sign-out.
+    }
 
     set({ user: null, isAuthenticated: false, error: null });
   },
@@ -123,7 +155,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       const user = await api.get<AuthenticatedUser>('/auth/me');
       set({ user });
     } catch {
-      // Leave cached identity; the SDK will handle session expiry
+      // Keep the cached identity.
     }
   },
 
@@ -133,8 +165,8 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
 }));
 
 /**
- * Listen for Supabase auth state changes — deferred to next tick so module
- * loading completes even if getSupabase() has issues.
+ * Reacts to a session ending outside the app (token revoked, password changed
+ * elsewhere). Deferred to the next tick so module loading completes first.
  */
 setTimeout(() => {
   try {
@@ -144,6 +176,6 @@ setTimeout(() => {
       }
     });
   } catch {
-    // Supabase not ready yet — the bootstrap flow handles this
+    // Supabase not configured; bootstrap surfaces that.
   }
 }, 0);

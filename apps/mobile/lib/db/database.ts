@@ -44,6 +44,9 @@ export function getDatabase(): Promise<SQLite.SQLiteDatabase> {
  * leaving a half-migrated schema.
  */
 async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
+  // WAL mode must be set outside a transaction (SQLite limitation).
+  await database.execAsync('PRAGMA journal_mode = WAL;');
+
   const result = await database.getFirstAsync<{ user_version: number }>(
     'PRAGMA user_version',
   );
@@ -51,9 +54,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
 
   for (let version = current; version < MIGRATIONS.length; version += 1) {
     const sql = MIGRATIONS[version]!;
-    await database.withTransactionAsync(async () => {
-      await database.execAsync(sql);
-    });
+    await database.execAsync(sql);
     // PRAGMA cannot be parameterised, and `version + 1` is a loop counter, not input.
     await database.execAsync(`PRAGMA user_version = ${version + 1}`);
   }

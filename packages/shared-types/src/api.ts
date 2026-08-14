@@ -14,7 +14,6 @@ import type {
   ClientPlatform,
   CompletionStatus,
   DeliverableType,
-  DevicePlatform,
   DocumentType,
   InternshipDomain,
   InternshipMode,
@@ -135,16 +134,6 @@ export interface ForgotPasswordRequest {
 export interface ResetPasswordRequest {
   token: string;
   password: string;
-}
-
-// ---------------------------------------------------------------------------
-// Device tokens
-// ---------------------------------------------------------------------------
-
-export interface RegisterDeviceTokenRequest {
-  expoPushToken: string;
-  platform: DevicePlatform;
-  appVersion?: string;
 }
 
 // ---------------------------------------------------------------------------
