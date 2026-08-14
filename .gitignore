@@ -1,0 +1,54 @@
+node_modules/
+.pnpm-store/
+
+# Env / secrets — never commit (07_Security_and_Privacy §6)
+.env
+.env.*
+!.env.example
+google-services.json
+GoogleService-Info.plist
+google-play-key.json
+
+# Build output
+dist/
+build/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# Expo
+.expo/
+.expo-shared/
+web-build/
+android/
+ios/
+*.apk
+*.aab
+*.ipa
+
+# Prisma
+backend/prisma/*.db
+backend/prisma/*.db-journal
+
+# Test / coverage
+coverage/
+.nyc_output/
+test-results/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Generated evidence exports
+backend/tmp/
+exports/

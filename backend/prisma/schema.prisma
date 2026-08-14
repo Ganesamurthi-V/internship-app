@@ -1,0 +1,867 @@
+// =============================================================================
+// Internship Management System — Prisma schema
+//
+// Mirrors docs/04_Database_Design.md §2 (tables) and §3 (indexes). Table and
+// column names are mapped to the exact snake_case identifiers in that document
+// so the SQL in the docs stays runnable against this database.
+//
+// TWO DELIBERATE DEVIATIONS FROM THE DOCUMENT, both explained at the field:
+//   1. `internships.duration_days` and `attendance.total_hours` are specified as
+//      `GENERATED ALWAYS AS (...) STORED`. Prisma cannot manage generated columns
+//      without permanent migration drift, so they are plain columns written by the
+//      server from the shared calculators. The invariant "computed, never manually
+//      entered" (04_Database_Design §5) is preserved in application code and
+//      covered by tests; the client can never supply either value.
+//   2. The CHECK-constrained TEXT columns are modelled as native Postgres enums.
+//      Same constraint, better type safety end to end.
+//
+// Tables added because an endpoint in 05_API_Spec cannot work without them are
+// grouped at the bottom under "SUPPORTING TABLES" and each says why it exists.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+
+  // Supabase-hosted Postgres.
+  //
+  // `url` is the pooled connection (Supavisor, port 6543). Serverless route
+  // handlers open and drop connections constantly, and the pooler is what keeps
+  // that from exhausting the database's connection limit.
+  //
+  // `directUrl` is the direct connection (port 5432). Prisma Migrate needs it
+  // because DDL, advisory locks and the shadow database do not work through a
+  // transaction-mode pooler.
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// =============================================================================
+// Enums — one per CHECK constraint in 04_Database_Design §2
+// =============================================================================
+
+enum UserRole {
+  student
+  faculty
+  mentor
+  admin
+}
+
+enum UserStatus {
+  active
+  suspended
+  pending
+}
+
+enum ClientPlatform {
+  ios
+  android
+  web
+}
+
+/// Push notifications only ever target real devices, never the web portal.
+enum DevicePlatform {
+  ios
+  android
+}
+
+enum InternshipDomain {
+  software_development
+  data_science_ai_ml
+  cyber_security
+  cloud_computing
+  networking
+  web_development
+  business_management
+  other
+}
+
+enum InternshipMode {
+  offline
+  online
+  hybrid
+}
+
+enum InternshipStatus {
+  pending
+  approved
+  active
+  completed
+  rejected
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  permission_leave
+  holiday
+  weekly_off
+}
+
+enum AttendanceMode {
+  office
+  online
+  hybrid
+}
+
+enum CompletionStatus {
+  yes
+  partially
+  no
+}
+
+enum DeliverableType {
+  code
+  documentation
+  design
+  analysis
+  testing
+  presentation
+  other
+}
+
+enum ObjectivesStatus {
+  fully
+  partially
+  no
+}
+
+/// The eight self-assessment axes from 01_PRD §4.6.
+enum SkillType {
+  technical_knowledge
+  problem_solving
+  communication
+  teamwork
+  time_management
+  professional_discipline
+  adaptability
+  industry_awareness
+}
+
+enum DocumentType {
+  offer_letter
+  joining_proof
+  completion_certificate
+  internship_report
+  project_report
+  attendance_statement
+  mentor_evaluation_doc
+  presentation
+  work_evidence
+  attendance_proof
+  weekly_report_pdf
+  other
+}
+
+enum VerificationStatus {
+  pending
+  verified
+  rejected
+}
+
+enum ExportJobStatus {
+  queued
+  running
+  ready
+  failed
+}
+
+// =============================================================================
+// Users, sessions and devices
+// =============================================================================
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique
+  /// Null for SSO accounts, and for mentors who have not yet claimed an invite.
+  /// bcrypt, cost >= 12 (07_Security_and_Privacy §5). Never leaves the server.
+  passwordHash String?    @map("password_hash")
+  role         UserRole
+  status       UserStatus @default(active)
+
+  /// Account lockout after 10 failed attempts in 15 minutes
+  /// (07_Security_and_Privacy §5). Cleared on any successful login.
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until") @db.Timestamptz(6)
+  lastLoginAt         DateTime? @map("last_login_at") @db.Timestamptz(6)
+
+  /// Display name for faculty, mentor and admin accounts, which have no student
+  /// profile row to read a name from.
+  name String?
+
+  /// ADDITION: the department a faculty coordinator or admin belongs to.
+  /// 02_SRS §1.1 scopes faculty access "to department/administrative assignment",
+  /// and 09_Test_Plan §3 tests that faculty cannot reach records outside their
+  /// department — neither is expressible without this column. Null for students
+  /// (whose department lives on `students`) and for mentors.
+  departmentId String?     @map("department_id") @db.Uuid
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  sessions            UserSession[]
+  deviceTokens        DeviceToken[]
+  passwordResetTokens PasswordResetToken[]
+  student             Student?
+  mentor              Mentor?
+  documents           Document[]
+  auditLogs           AuditLog[]
+  notifications       NotificationLog[]
+  exportJobs          ExportJob[]
+
+  coordinatedInternships Internship[] @relation("FacultyCoordinator")
+  approvedInternships    Internship[] @relation("InternshipApprover")
+  unlockedAssessments    FinalAssessment[] @relation("AssessmentUnlocker")
+
+  @@index([role, status])
+  @@map("users")
+}
+
+model UserSession {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the refresh token, not the token itself: a database leak must not
+  /// hand out usable sessions. Still UNIQUE, so reuse detection works unchanged.
+  refreshToken String @unique @map("refresh_token")
+
+  clientPlatform ClientPlatform? @map("client_platform")
+  clientVersion  String?         @map("client_version")
+
+  /// Rotation chain. All sessions sharing a `familyId` descend from one login, so
+  /// detecting reuse of a rotated token lets us revoke the whole family
+  /// (07_Security_and_Privacy §5 "token family invalidation on theft detection").
+  familyId String  @map("family_id") @db.Uuid
+  /// Set when this token has been rotated away; presenting it again is a theft signal.
+  rotatedAt DateTime? @map("rotated_at") @db.Timestamptz(6)
+
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model DeviceToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expoPushToken String         @map("expo_push_token")
+  platform      DevicePlatform
+  appVersion    String?        @map("app_version")
+
+  lastActiveAt DateTime @default(now()) @map("last_active_at") @db.Timestamptz(6)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([userId, expoPushToken])
+  @@index([userId])
+  @@map("device_tokens")
+}
+
+// =============================================================================
+// Institution structures
+// =============================================================================
+
+model Department {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  institution String   @default("Sri Manakula Vinayagar Engineering College")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  students Student[]
+  /// Faculty and admin members assigned to this department.
+  staff    User[]
+
+  @@unique([name, institution])
+  @@map("departments")
+}
+
+model Organisation {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  location  String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  mentors     Mentor[]
+  internships Internship[]
+
+  /// Unique on name alone, not (name, location): registration upserts an
+  /// organisation by the name the student typed, and a nullable column in a
+  /// unique key would let duplicates through, since Postgres treats NULLs as
+  /// distinct.
+  @@unique([name])
+  @@map("organisations")
+}
+
+model Student {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @unique @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The master key for a student record (01_PRD §1). Stored uppercase.
+  registerNumber String @unique @map("register_number")
+  name           String
+  programme      String
+
+  departmentId String?     @map("department_id") @db.Uuid
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  /// CHECK (year BETWEEN 1 AND 5) — added by migration.
+  year         Int?
+  section      String?
+  studentEmail String  @map("student_email")
+  mobile       String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  internships     Internship[]
+  attendance      Attendance[]
+  workLogs        DailyWorkLog[]
+  weeklyReports   WeeklyReport[]
+  finalAssessments FinalAssessment[]
+
+  @@index([registerNumber])
+  @@index([departmentId])
+  @@map("students")
+}
+
+model Mentor {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Null until the mentor claims the invite link and creates an account.
+  userId String? @unique @map("user_id") @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  name        String
+  designation String?
+  email       String?
+  contact     String?
+
+  organisationId String?       @map("organisation_id") @db.Uuid
+  organisation   Organisation? @relation(fields: [organisationId], references: [id], onDelete: SetNull)
+
+  /// SHA-256 of the invite token. The plaintext is shown once, in the invite URL,
+  /// and is never recoverable from the database (07_Security_and_Privacy §6).
+  inviteToken   String?   @unique @map("invite_token")
+  inviteExpires DateTime? @map("invite_expires") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  internships Internship[]
+  evaluations MentorEvaluation[]
+
+  @@index([email])
+  @@index([organisationId])
+  @@map("mentors")
+}
+
+// =============================================================================
+// Internship
+// =============================================================================
+
+model Internship {
+  id String @id @default(uuid()) @db.Uuid
+
+  studentId String  @map("student_id") @db.Uuid
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  organisationId String?       @map("organisation_id") @db.Uuid
+  organisation   Organisation? @relation(fields: [organisationId], references: [id], onDelete: SetNull)
+
+  mentorId String? @map("mentor_id") @db.Uuid
+  mentor   Mentor? @relation(fields: [mentorId], references: [id], onDelete: SetNull)
+
+  facultyCoordinatorId String? @map("faculty_coordinator_id") @db.Uuid
+  facultyCoordinator   User?   @relation("FacultyCoordinator", fields: [facultyCoordinatorId], references: [id], onDelete: SetNull)
+
+  domain InternshipDomain
+  mode   InternshipMode
+
+  startDate DateTime @map("start_date") @db.Date
+  endDate   DateTime @map("end_date") @db.Date
+
+  /// DEVIATION (1): the document specifies
+  /// `GENERATED ALWAYS AS (end_date - start_date) STORED`. Written by the server
+  /// on every create/update of the dates, never accepted from the client. Kept as
+  /// the same exclusive day span as the document so any SQL in the docs still
+  /// returns the same number.
+  durationDays Int @map("duration_days")
+
+  workingHoursPerDay Decimal @map("working_hours_per_day") @db.Decimal(4, 2)
+
+  status InternshipStatus @default(pending)
+
+  approvedById String? @map("approved_by") @db.Uuid
+  approvedBy   User?   @relation("InternshipApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  approvedAt      DateTime? @map("approved_at") @db.Timestamptz(6)
+  rejectionReason String?   @map("rejection_reason")
+  submittedAt     DateTime? @map("submitted_at") @db.Timestamptz(6)
+
+  /// ADDITION: gates the optional daily evidence upload described in
+  /// 02_SRS §2.3 ("gated by 'Is the organisation permitting evidence uploads?'").
+  /// Defaults to false so we never invite an upload the organisation has not allowed.
+  evidenceUploadsPermitted Boolean @default(false) @map("evidence_uploads_permitted")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  attendance       Attendance[]
+  workLogs         DailyWorkLog[]
+  weeklyReports    WeeklyReport[]
+  finalAssessment  FinalAssessment?
+  mentorEvaluation MentorEvaluation?
+  documents        Document[]
+
+  @@index([studentId, status])
+  @@index([startDate, endDate])
+  @@index([facultyCoordinatorId])
+  @@index([organisationId])
+  @@index([status])
+  @@map("internships")
+}
+
+// =============================================================================
+// Daily operations
+// =============================================================================
+
+model Attendance {
+  id String @id @default(uuid()) @db.Uuid
+
+  internshipId String     @map("internship_id") @db.Uuid
+  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
+
+  /// Denormalised from the internship so student-scoped queries and the
+  /// `attendance(student_id, attendance_date)` index work without a join.
+  studentId String  @map("student_id") @db.Uuid
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  attendanceDate DateTime         @map("attendance_date") @db.Date
+  status         AttendanceStatus
+
+  reportingTime String? @map("reporting_time")
+  leavingTime   String? @map("leaving_time")
+
+  /// DEVIATION (1): the document specifies a generated column
+  /// `EXTRACT(EPOCH FROM (leaving_time - reporting_time))/3600`.
+  /// Written by the server via `calculateTotalHours`, which produces the same
+  /// value rounded to the column's two decimals. Null when either time is absent.
+  totalHours Decimal? @map("total_hours") @db.Decimal(5, 2)
+
+  mode AttendanceMode?
+
+  /// Optional. 02_SRS §2.2 is explicit that proof must never block submission.
+  proofDocumentId String?   @unique @map("proof_document_id") @db.Uuid
+  proofDocument   Document? @relation("AttendanceProof", fields: [proofDocumentId], references: [id], onDelete: SetNull)
+
+  leaveReason String? @map("leave_reason")
+
+  /// A soft confirmation by the mentor, not a gate (02_SRS §2.2).
+  mentorVerified   Boolean   @default(false) @map("mentor_verified")
+  mentorVerifiedAt DateTime? @map("mentor_verified_at") @db.Timestamptz(6)
+
+  /// Device-generated idempotency key for offline sync. Null for online writes.
+  clientId String?   @unique @map("client_id") @db.Uuid
+  syncedAt DateTime? @map("synced_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  /// One record per student per internship date (02_SRS §2.2).
+  @@unique([internshipId, attendanceDate])
+  @@index([internshipId, attendanceDate])
+  @@index([studentId, attendanceDate])
+  @@index([clientId])
+  @@index([mentorVerified])
+  @@map("attendance")
+}
+
+model DailyWorkLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  internshipId String     @map("internship_id") @db.Uuid
+  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
+
+  studentId String  @map("student_id") @db.Uuid
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  workDate DateTime @map("work_date") @db.Date
+
+  /// <= 200 words, enforced by the shared Zod schema on client and server.
+  activities String
+  /// Postgres TEXT[] of technology tags.
+  technologies String[]
+
+  taskAssigned     String?           @map("task_assigned")
+  completionStatus CompletionStatus? @map("completion_status")
+
+  /// <= 100 words.
+  learning  String?
+  challenge String?
+  solution  String?
+
+  deliverableType DeliverableType? @map("deliverable_type")
+
+  evidenceDocumentId String?   @unique @map("evidence_document_id") @db.Uuid
+  evidenceDocument   Document? @relation("WorkLogEvidence", fields: [evidenceDocumentId], references: [id], onDelete: SetNull)
+
+  mentorInteraction Boolean @default(false) @map("mentor_interaction")
+  mentorFeedback    String? @map("mentor_feedback")
+
+  clientId String?   @unique @map("client_id") @db.Uuid
+  syncedAt DateTime? @map("synced_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([internshipId, workDate])
+  @@index([internshipId, workDate])
+  @@index([studentId, workDate])
+  @@index([clientId])
+  @@index([mentorInteraction])
+  @@map("daily_work_logs")
+}
+
+// =============================================================================
+// Weekly report
+// =============================================================================
+
+model WeeklyReport {
+  id String @id @default(uuid()) @db.Uuid
+
+  internshipId String     @map("internship_id") @db.Uuid
+  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
+
+  studentId String  @map("student_id") @db.Uuid
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  weekNumber    Int      @map("week_number")
+  weekStartDate DateTime @map("week_start_date") @db.Date
+  weekEndDate   DateTime @map("week_end_date") @db.Date
+
+  /// Auto-aggregated from attendance by the server. 02_SRS §2.4: the student
+  /// cannot override these, so the API never reads them from the request body.
+  daysAttended Int?     @map("days_attended")
+  totalHours   Decimal? @map("total_hours") @db.Decimal(6, 2)
+
+  majorActivities     String?  @map("major_activities")
+  technologiesLearned String[] @map("technologies_learned")
+  skillsDeveloped     String[] @map("skills_developed")
+  majorAssignment     String?  @map("major_assignment")
+  problems            String?
+  solutions           String?
+  learningOutcomes    String?  @map("learning_outcomes")
+  mentorFeedback      String?  @map("mentor_feedback")
+  studentSelfAssessment String? @map("student_self_assessment")
+
+  reportDocumentId String?   @unique @map("report_document_id") @db.Uuid
+  reportDocument   Document? @relation("WeeklyReportPdf", fields: [reportDocumentId], references: [id], onDelete: SetNull)
+
+  /// Null while still a draft.
+  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([internshipId, weekNumber])
+  @@index([internshipId, weekNumber])
+  @@index([studentId])
+  @@map("weekly_reports")
+}
+
+// =============================================================================
+// Final assessment
+// =============================================================================
+
+model FinalAssessment {
+  id String @id @default(uuid()) @db.Uuid
+
+  internshipId String     @unique @map("internship_id") @db.Uuid
+  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
+
+  studentId String  @map("student_id") @db.Uuid
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  completedSuccessfully Boolean? @map("completed_successfully")
+
+  /// Auto-filled from attendance aggregation (01_PRD §4.5).
+  totalDaysAttended Int?     @map("total_days_attended")
+  totalHours        Decimal? @map("total_hours") @db.Decimal(6, 2)
+
+  majorProject         String?  @map("major_project")
+  technologiesMastered String[] @map("technologies_mastered")
+  skillsDeveloped      String[] @map("skills_developed")
+
+  objectivesStatus ObjectivesStatus? @map("objectives_status")
+  /// CHECK (usefulness_rating BETWEEN 1 AND 5) — added by migration.
+  usefulnessRating Int?              @map("usefulness_rating")
+
+  technicalImprovement     String? @map("technical_improvement")
+  employabilityImprovement String? @map("employability_improvement")
+  curriculumRelation       String? @map("curriculum_relation")
+  realWorldExposure        String? @map("real_world_exposure")
+  recommendOrganisation    Boolean? @map("recommend_organisation")
+  suggestions              String?
+
+  /// Non-null means locked. Reopening clears it and is audited as High
+  /// sensitivity (02_SRS §2.5, 07_Security_and_Privacy §9).
+  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(6)
+
+  /// ADDITION: backs `POST /api/final-assessment/:id/unlock`. 02_SRS §2.5 allows
+  /// faculty to enable early access before the end date, and to reopen after
+  /// submission; neither is expressible without recording the grant.
+  facultyUnlockedAt DateTime? @map("faculty_unlocked_at") @db.Timestamptz(6)
+  facultyUnlockedById String? @map("faculty_unlocked_by") @db.Uuid
+  facultyUnlockedBy   User?   @relation("AssessmentUnlocker", fields: [facultyUnlockedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  skillRatings SkillRating[]
+
+  @@index([studentId])
+  @@map("final_assessments")
+}
+
+model SkillRating {
+  id String @id @default(uuid()) @db.Uuid
+
+  finalAssessmentId String          @map("final_assessment_id") @db.Uuid
+  finalAssessment   FinalAssessment @relation(fields: [finalAssessmentId], references: [id], onDelete: Cascade)
+
+  skillType SkillType @map("skill_type")
+  /// CHECK (rating BETWEEN 1 AND 5) — added by migration.
+  rating    Int
+
+  @@unique([finalAssessmentId, skillType])
+  @@map("skill_ratings")
+}
+
+// =============================================================================
+// Mentor evaluation
+// =============================================================================
+
+model MentorEvaluation {
+  id String @id @default(uuid()) @db.Uuid
+
+  internshipId String     @unique @map("internship_id") @db.Uuid
+  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
+
+  mentorId String @map("mentor_id") @db.Uuid
+  mentor   Mentor @relation(fields: [mentorId], references: [id], onDelete: Cascade)
+
+  /// All ten parameters: CHECK (... BETWEEN 1 AND 5), added by migration.
+  technicalKnowledge    Int? @map("technical_knowledge")
+  problemSolving        Int? @map("problem_solving")
+  communication         Int?
+  teamwork              Int?
+  professionalBehaviour Int? @map("professional_behaviour")
+  punctualityAttendance Int? @map("punctuality_attendance")
+  abilityToLearn        Int? @map("ability_to_learn")
+  initiative            Int?
+  qualityOfWork         Int? @map("quality_of_work")
+  overallPerformance    Int? @map("overall_performance")
+
+  strengths                String?
+  improvementAreas         String?  @map("improvement_areas")
+  remarks                  String?
+  employmentRecommendation Boolean? @map("employment_recommendation")
+
+  /// 02_SRS §2.6 — the mentor's signature. Immutable once true, unless
+  /// faculty/admin reopens, which clears it and is audited.
+  digitalConfirmation Boolean   @default(false) @map("digital_confirmation")
+  submittedAt         DateTime? @map("submitted_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([internshipId])
+  @@index([mentorId])
+  @@map("mentor_evaluations")
+}
+
+// =============================================================================
+// Documents
+// =============================================================================
+
+model Document {
+  id String @id @default(uuid()) @db.Uuid
+
+  ownerUserId String @map("owner_user_id") @db.Uuid
+  ownerUser   User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  documentType DocumentType @map("document_type")
+
+  /// Random UUID path, never derived from the filename or student id
+  /// (07_Security_and_Privacy §4). Server-only: excluded from every API response.
+  storageKey String @unique @map("storage_key")
+
+  originalFilename String @map("original_filename")
+  mimeType         String @map("mime_type")
+  sizeBytes        Int    @map("size_bytes")
+  /// SHA-256 for integrity.
+  checksum         String?
+
+  uploadedAt DateTime  @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  verifiedAt DateTime? @map("verified_at") @db.Timestamptz(6)
+
+  verificationStatus VerificationStatus @default(pending) @map("verification_status")
+  rejectionReason    String?            @map("rejection_reason")
+  verifiedById       String?            @map("verified_by") @db.Uuid
+
+  /// ADDITION: 07_Security_and_Privacy §4 requires a deleted document's key to be
+  /// "marked deleted" while the object is removed from storage asynchronously.
+  /// A soft-delete column is what makes that two-phase deletion possible.
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  /// ADDITION: `GET /api/documents?internshipId=` cannot be served from
+  /// `owner_user_id` alone. Nullable because profile-level documents have no
+  /// internship.
+  internshipId String?     @map("internship_id") @db.Uuid
+  internship   Internship? @relation(fields: [internshipId], references: [id], onDelete: SetNull)
+
+  attendanceProof Attendance?   @relation("AttendanceProof")
+  workLogEvidence DailyWorkLog? @relation("WorkLogEvidence")
+  weeklyReportPdf WeeklyReport? @relation("WeeklyReportPdf")
+
+  @@index([ownerUserId, documentType])
+  @@index([internshipId, documentType])
+  @@index([verificationStatus])
+  @@map("documents")
+}
+
+// =============================================================================
+// Audit and notifications
+// =============================================================================
+
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Nullable: a failed login has no authenticated actor yet.
+  actorUserId String? @map("actor_user_id") @db.Uuid
+  actorUser   User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  action     String
+  entityType String  @map("entity_type")
+  entityId   String? @map("entity_id") @db.Uuid
+
+  clientPlatform ClientPlatform? @map("client_platform")
+  clientVersion  String?         @map("client_version")
+  ipAddress      String?         @map("ip_address") @db.Inet
+
+  metadata Json?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@index([actorUserId])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+model NotificationLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Values come from `NOTIFICATION_TYPES` in @ims/shared-types. Left as TEXT to
+  /// match 04_Database_Design, so adding a notification kind needs no migration.
+  type  String
+  title String
+  body  String?
+
+  /// Payload for deep-linking on tap. Never contains student names or record
+  /// details (07_Security_and_Privacy §7).
+  data Json?
+
+  deliveredAt DateTime? @map("delivered_at") @db.Timestamptz(6)
+  readAt      DateTime? @map("read_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId, readAt])
+  @@index([createdAt])
+  @@map("notification_logs")
+}
+
+// =============================================================================
+// SUPPORTING TABLES
+// Not in 04_Database_Design, but each is required by an endpoint in 05_API_Spec.
+// =============================================================================
+
+/// Backs `POST /api/auth/forgot-password` and `/reset-password`.
+/// 07_Security_and_Privacy §5: single-use, time-limited (1 hour), emailed only to
+/// a verified address. Only the hash is stored.
+model PasswordResetToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+/// Backs the async export pair `POST /api/reports/export` (returns a job id) and
+/// `GET /api/reports/export/:jobId` (poll status, then download).
+model ExportJob {
+  id String @id @default(uuid()) @db.Uuid
+
+  requestedById String @map("requested_by") @db.Uuid
+  requestedBy   User   @relation(fields: [requestedById], references: [id], onDelete: Cascade)
+
+  scope  String
+  format String
+  /// The validated request parameters, replayed by the worker.
+  params Json
+
+  status   ExportJobStatus @default(queued)
+  progress Int             @default(0)
+
+  /// Set when ready. Downloads are issued as presigned URLs, so the key stays server-side.
+  storageKey String? @map("storage_key")
+  error      String?
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+
+  @@index([requestedById, status])
+  @@index([status])
+  @@map("export_jobs")
+}
+
+/// Backs the admin-configurable notification schedule and document requirements
+/// (02_SRS §1.5 and §4: "Notification schedules are configurable by Admin").
+/// A single-row-per-key store keeps settings auditable without a migration for
+/// every new toggle.
+model AppSetting {
+  key   String @id
+  value Json
+
+  updatedById String?  @map("updated_by") @db.Uuid
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("app_settings")
+}

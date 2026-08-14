@@ -1,0 +1,45 @@
+{
+  "name": "@ims/backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "prisma generate && next build",
+    "start": "next start -p 3000",
+    "typecheck": "prisma generate && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:reset": "prisma migrate reset",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "prisma db seed"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@ims/shared-types": "workspace:*",
+    "@ims/shared-validation": "workspace:*",
+    "@prisma/client": "6.2.1",
+    "@supabase/supabase-js": "2.48.1",
+    "bcryptjs": "2.4.3",
+    "jose": "5.9.6",
+    "next": "15.5.23",
+    "pdfkit": "0.16.0",
+    "pino": "9.6.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "2.4.6",
+    "@types/node": "22.10.5",
+    "@types/pdfkit": "0.13.9",
+    "@types/react": "19.2.18",
+    "prisma": "6.2.1",
+    "tsx": "4.19.2",
+    "typescript": "5.7.3",
+    "vitest": "2.1.9"
+  }
+}

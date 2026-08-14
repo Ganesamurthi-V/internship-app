@@ -1,0 +1,93 @@
+{
+  "expo": {
+    "name": "Internship Manager",
+    "slug": "internship-manager",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "internshipmanager",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1e3a5f"
+    },
+    "ios": {
+      "bundleIdentifier": "edu.smvec.internship",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used to scan and upload internship documents.",
+        "NSPhotoLibraryUsageDescription": "Used to upload internship documents from your gallery.",
+        "NSFaceIDUsageDescription": "Used to secure app access with Face ID.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "edu.smvec.internship",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png",
+        "backgroundColor": "#1e3a5f"
+      },
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "RECEIVE_BOOT_COMPLETED",
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT"
+      ],
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-sqlite",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Used to secure your app access."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Used to scan internship documents."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Used to upload internship documents from your gallery."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#1e3a5f"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "flipper": false
+          },
+          "android": {
+            "usesCleartextTraffic": false
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "00000000-0000-0000-0000-000000000000"
+      }
+    }
+  }
+}

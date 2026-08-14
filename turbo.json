@@ -1,0 +1,36 @@
+{
+  "globalEnv": [
+    "NODE_ENV",
+    "DATABASE_URL",
+    "AUTH_SECRET",
+    "AUTH_ACCESS_TOKEN_EXPIRY",
+    "AUTH_REFRESH_TOKEN_EXPIRY",
+    "STORAGE_ENDPOINT",
+    "STORAGE_BUCKET",
+    "STORAGE_REGION",
+    "STORAGE_ACCESS_KEY",
+    "STORAGE_SECRET_KEY",
+    "APP_URL",
+    "EXPO_PUSH_API_URL",
+    "REDIS_URL",
+    "EXPO_PUBLIC_API_URL",
+    "EXPO_PUBLIC_APP_ENV"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "lint": {},
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

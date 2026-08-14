@@ -1,0 +1,38 @@
+{
+  "name": "internship-management",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "backend:dev": "pnpm --filter @ims/backend dev",
+    "backend:migrate": "pnpm --filter @ims/backend prisma:migrate",
+    "backend:seed": "pnpm --filter @ims/backend prisma:seed",
+    "mobile:start": "pnpm --filter @ims/mobile start",
+    "mobile:android": "pnpm --filter @ims/mobile android",
+    "mobile:ios": "pnpm --filter @ims/mobile ios"
+  },
+  "dependencies": {
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "zod": "3.24.1",
+      "react": "19.2.3",
+      "react-dom": "19.2.3"
+    }
+  }
+}
