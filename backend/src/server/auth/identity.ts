@@ -1,31 +1,16 @@
 /**
- * Builds the `AuthenticatedUser` blob returned by login, refresh and
- * `GET /api/auth/me` (05_API_Spec "Authentication").
+ * Builds the `AuthenticatedUser` blob returned by login and `GET /api/auth/me`.
  *
- * Domain logic lives under `src/server/<domain>/`, mirroring the
- * `backend/src/auth`, `backend/src/students`, ... layout in 03_TechSpec §4. The
- * `src/app/api/**` tree holds only the thin HTTP layer, because Next.js reserves
- * those paths for routing.
+ * Takes a Supabase `auth_id` and resolves it to the application user.
  */
 
 import type { AuthenticatedUser, UserRole } from '@ims/shared-types';
 import { prisma } from '@/lib/prisma';
 import { unauthorized } from '@/lib/errors';
 
-/**
- * Resolves the display identity for a user.
- *
- * `name` falls back through student profile → mentor profile → the user's own name
- * column → the email local part, so the app always has something to greet the user
- * with even for a freshly created faculty account.
- *
- * `activeInternshipId` is included for students so the app can skip a round trip
- * on launch; it picks the internship the student is actually working in, preferring
- * an active or approved one over a pending or completed record.
- */
-export async function buildAuthenticatedUser(userId: string): Promise<AuthenticatedUser> {
+export async function buildAuthenticatedUser(authId: string): Promise<AuthenticatedUser> {
   const user = await prisma.user.findUnique({
-    where: { id: userId },
+    where: { authId },
     select: {
       id: true,
       email: true,
@@ -37,8 +22,6 @@ export async function buildAuthenticatedUser(userId: string): Promise<Authentica
           name: true,
           internships: {
             where: { status: { in: ['approved', 'active', 'pending'] } },
-            // 'active' sorts before 'approved' before 'pending' alphabetically,
-            // which happens to be the priority we want; the newest wins on ties.
             orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
             take: 1,
             select: { id: true },
@@ -50,7 +33,7 @@ export async function buildAuthenticatedUser(userId: string): Promise<Authentica
   });
 
   if (!user) {
-    throw unauthorized('Your session is no longer valid. Sign in again.');
+    throw unauthorized('Your account is not set up. Sign up first or contact your department office.');
   }
 
   const identity: AuthenticatedUser = {

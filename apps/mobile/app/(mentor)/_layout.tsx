@@ -17,6 +17,7 @@ export default function MentorLayout() {
       }}
     >
       <Stack.Screen name="dashboard" options={{ title: 'Mentor Dashboard' }} />
+      <Stack.Screen name="evaluation/[internshipId]" options={{ title: 'Evaluation' }} />
     </Stack>
   );
 }

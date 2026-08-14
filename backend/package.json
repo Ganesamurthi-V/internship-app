@@ -24,8 +24,6 @@
     "@ims/shared-validation": "workspace:*",
     "@prisma/client": "6.2.1",
     "@supabase/supabase-js": "2.48.1",
-    "bcryptjs": "2.4.3",
-    "jose": "5.9.6",
     "next": "15.5.23",
     "pdfkit": "0.16.0",
     "pino": "9.6.0",
@@ -33,7 +31,6 @@
     "react-dom": "19.2.3"
   },
   "devDependencies": {
-    "@types/bcryptjs": "2.4.6",
     "@types/node": "22.10.5",
     "@types/pdfkit": "0.13.9",
     "@types/react": "19.2.18",

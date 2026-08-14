@@ -1,55 +1,25 @@
 /**
  * Student profile — 12_Mobile_App_Spec §2.
  *
- * Read-only view of the academic record plus the sign-out and biometric controls.
- * The register number is deliberately not editable: it is the master key for the
- * student record (01_PRD §1), and `updateStudentProfileSchema` omits it server-side.
+ * Read-only view of the academic record plus sign-out.
  */
 
-import { useEffect, useState } from 'react';
-import { StyleSheet, Switch, Text, View } from 'react-native';
+import { useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
-import * as LocalAuthentication from 'expo-local-authentication';
 import { Screen } from '@/components/shared/Screen';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useMyProfile } from '@/lib/api/hooks';
-import { tokenStore } from '@/lib/auth/tokenStore';
 import { useAuthStore } from '@/stores/authStore';
-import { colors, fontSize, spacing, touchTarget } from '@/constants/theme';
+import { colors, fontSize, spacing } from '@/constants/theme';
 
 export default function ProfileScreen() {
   const { data, isLoading } = useMyProfile();
   const logout = useAuthStore((state) => state.logout);
   const user = useAuthStore((state) => state.user);
 
-  const [biometricSupported, setBiometricSupported] = useState(false);
-  const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
-
-  useEffect(() => {
-    void (async () => {
-      const [hasHardware, isEnrolled, enabled] = await Promise.all([
-        LocalAuthentication.hasHardwareAsync(),
-        LocalAuthentication.isEnrolledAsync(),
-        tokenStore.isBiometricEnabled(),
-      ]);
-      setBiometricSupported(hasHardware && isEnrolled);
-      setBiometricEnabled(enabled);
-    })();
-  }, []);
-
-  const toggleBiometric = async (next: boolean): Promise<void> => {
-    if (next) {
-      // Confirm the user can actually pass the check before promising it at next launch.
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Confirm to enable biometric unlock',
-      });
-      if (!result.success) return;
-    }
-    await tokenStore.setBiometricEnabled(next);
-    setBiometricEnabled(next);
-  };
 
   const onSignOut = async (): Promise<void> => {
     setSigningOut(true);
@@ -78,27 +48,6 @@ export default function ProfileScreen() {
           <Text style={styles.muted}>Could not load your profile.</Text>
         )}
       </Card>
-
-      {biometricSupported ? (
-        <Card title="Security">
-          <View style={styles.switchRow}>
-            <View style={styles.switchLabel}>
-              <Text style={styles.switchTitle}>Biometric unlock</Text>
-              <Text style={styles.muted}>
-                Use Face ID, Touch ID or your fingerprint to unlock the app instead of typing your
-                password.
-              </Text>
-            </View>
-            <Switch
-              value={biometricEnabled}
-              onValueChange={(next) => void toggleBiometric(next)}
-              accessibilityLabel="Biometric unlock"
-              accessibilityRole="switch"
-              trackColor={{ true: colors.primary, false: colors.borderStrong }}
-            />
-          </View>
-        </Card>
-      ) : null}
 
       <Card title="Account">
         <Text style={styles.muted}>
@@ -132,8 +81,5 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
   rowLabel: { fontSize: fontSize.small, color: colors.textMuted, flexShrink: 0 },
   rowValue: { fontSize: fontSize.small, color: colors.text, fontWeight: '600', flexShrink: 1, textAlign: 'right' },
-  switchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: touchTarget },
-  switchLabel: { flex: 1, gap: 2 },
-  switchTitle: { fontSize: fontSize.body, fontWeight: '600', color: colors.text },
   spacer: { height: spacing.md },
 });

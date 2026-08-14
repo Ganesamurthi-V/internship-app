@@ -263,3 +263,10 @@ pnpm test                           # all tests
 cd backend && pnpm prisma:studio    # browse data
 cd backend && pnpm prisma:migrate   # new migration after a schema change
 ```
+
+Role	Email	Password
+Admin	admin@smvec.ac.in	Internship1
+Faculty	faculty@smvec.ac.in	Internship1
+Mentor	raj@iinvsys.example	Internship1
+Student	praveen@smvec.ac.in	Internship1
+Student	divya@smvec.ac.in	Internship1

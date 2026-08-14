@@ -1,22 +1,30 @@
 /**
- * POST /api/auth/reset-password — 05_API_Spec "Authentication".
+ * POST /api/auth/reset-password — updates password via Supabase Auth.
  *
- * Consumes the single-use token, sets the new password, and revokes every existing
- * session (07_Security_and_Privacy §5).
+ * The user must have a valid session (from the reset link callback) to call this.
+ * The mobile app can also use this after verifying the reset token via deep link.
  */
 
 import type { NextRequest } from 'next/server';
-import { resetPasswordSchema } from '@ims/shared-validation';
-import { getRequestContext, noContent, parseJson, withErrorHandling } from '@/lib/http';
-import { enforceRateLimit } from '@/lib/rateLimit';
-import { completePasswordReset } from '@/server/auth/passwordResetService';
+import { z } from 'zod';
+import { noContent, parseJson, withErrorHandling } from '@/lib/http';
+import { unauthorized } from '@/lib/errors';
+import { createSupabaseUserClient } from '@/lib/supabase';
+
+const schema = z.object({
+  accessToken: z.string().min(1, 'Access token is required.'),
+  password: z.string().min(8, 'Password must be at least 8 characters.'),
+});
 
 export const POST = withErrorHandling(async (request: NextRequest) => {
-  const context = getRequestContext(request);
-  await enforceRateLimit('auth', context.ipAddress);
+  const { accessToken, password } = await parseJson(request, schema);
 
-  const input = await parseJson(request, resetPasswordSchema);
-  await completePasswordReset({ token: input.token, password: input.password }, context);
+  const supabase = createSupabaseUserClient(accessToken);
+  const { error } = await supabase.auth.updateUser({ password });
+
+  if (error) {
+    throw unauthorized(error.message || 'Could not update password.');
+  }
 
   return noContent();
 });

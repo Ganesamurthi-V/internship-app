@@ -1,31 +1,90 @@
 /**
- * POST /api/auth/login — 05_API_Spec "Authentication".
+ * POST /api/auth/login — delegates to Supabase Auth signInWithPassword.
  *
- * Rate limited at 10/min per IP *and* per email (07_Security_and_Privacy §6),
- * which is why the body is parsed before the limiter runs: the email is part of
- * the limiter key.
+ * On first login, if no application user record exists, one is created automatically
+ * (auto-provisioning). The caller's role is determined by metadata set during signup
+ * or admin assignment.
  */
 
 import type { NextRequest } from 'next/server';
 import { loginSchema } from '@ims/shared-validation';
-import { getRequestContext, ok, parseJson, withErrorHandling } from '@/lib/http';
-import { enforceLoginRateLimit } from '@/lib/rateLimit';
-import { login } from '@/server/auth/loginService';
+import { ok, parseJson, withErrorHandling, getRequestContext } from '@/lib/http';
+import { unauthorized } from '@/lib/errors';
+import { supabaseAdmin } from '@/lib/supabase';
+import { prisma } from '@/lib/prisma';
+import { recordAudit } from '@/lib/audit';
+import { buildAuthenticatedUser } from '@/server/auth/identity';
 
 export const POST = withErrorHandling(async (request: NextRequest) => {
   const context = getRequestContext(request);
-  const credentials = await parseJson(request, loginSchema);
+  const { email, password } = await parseJson(request, loginSchema);
 
-  await enforceLoginRateLimit(context.ipAddress, credentials.email);
+  // Sign in through Supabase Auth
+  const { data, error } = await supabaseAdmin().auth.signInWithPassword({ email, password });
 
-  const result = await login(credentials, context);
-  return ok(result);
+  if (error || !data.session || !data.user) {
+    await recordAudit({
+      action: 'login_failure',
+      entityType: 'user',
+      entityId: null,
+      context,
+      metadata: { email, reason: error?.message ?? 'unknown' },
+    });
+    throw unauthorized('Email or password is incorrect.');
+  }
+
+  // Ensure the application user record exists (auto-provision on first login)
+  let appUser = await prisma.user.findUnique({
+    where: { authId: data.user.id },
+    select: { id: true },
+  });
+
+  if (!appUser) {
+    // Check if there's already a user with this email (pre-seeded)
+    appUser = await prisma.user.findUnique({
+      where: { email: data.user.email! },
+      select: { id: true, authId: true },
+    });
+
+    if (appUser && !(appUser as { authId?: string }).authId) {
+      // Link existing user to the Supabase auth account
+      await prisma.user.update({
+        where: { id: appUser.id },
+        data: { authId: data.user.id },
+      });
+    } else if (!appUser) {
+      // Create a new application user
+      const role = (data.user.user_metadata?.role as string) ?? 'student';
+      appUser = await prisma.user.create({
+        data: {
+          authId: data.user.id,
+          email: data.user.email!,
+          role: role as never,
+          status: 'active',
+          name: data.user.user_metadata?.name as string ?? null,
+        },
+        select: { id: true },
+      });
+    }
+  }
+
+  await recordAudit({
+    action: 'login_success',
+    entityType: 'user',
+    entityId: appUser!.id,
+    actorUserId: appUser!.id,
+    context,
+  });
+
+  const user = await buildAuthenticatedUser(data.user.id);
+
+  return ok({
+    accessToken: data.session.access_token,
+    refreshToken: data.session.refresh_token,
+    expiresIn: data.session.expires_in,
+    user,
+  });
 });
 
-/**
- * Route segment config. `force-dynamic` because auth depends on request headers and
- * must never be prerendered or cached; `nodejs` because bcrypt is not available in
- * the edge runtime.
- */
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';

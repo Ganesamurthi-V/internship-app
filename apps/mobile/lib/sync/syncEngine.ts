@@ -141,7 +141,7 @@ class SyncEngine {
     }
 
     // Nothing to send without a session — the endpoint is student-scoped.
-    if (!hasSession()) {
+    if (!(await hasSession())) {
       return { attempted: 0, synced: 0, duplicates: 0, failed: 0, skipped: true };
     }
 

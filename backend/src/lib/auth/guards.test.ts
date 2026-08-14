@@ -34,9 +34,9 @@ const MECH_DEPARTMENT = 'dept-mech';
 function auth(overrides: Partial<AuthContext> & { role: UserRole }): AuthContext {
   return {
     userId: 'user-generic',
+    authId: 'auth-generic',
     email: 'user@smvec.ac.in',
     name: 'Test User',
-    sessionId: 'session-1',
     studentId: null,
     mentorId: null,
     departmentId: null,

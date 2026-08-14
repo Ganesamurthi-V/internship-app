@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import type { StudentDashboard as StudentDashboardData } from '@ims/shared-types';
 import { INTERNSHIP_STATUS_LABELS } from '@ims/shared-types';
@@ -31,22 +31,6 @@ import { colors, fontSize, spacing } from '@/constants/theme';
 interface LocalToday {
   attendance: boolean;
   workLog: boolean;
-}
-
-/**
- * Placeholder for the flows that are not built yet: the registration wizard, the
- * documents checklist, weekly reports and the final assessment.
- *
- * The cards are kept because they are what the dashboard is *for* (06_App_Flow §4/§5/§6
- * all drive off them), but a button that navigated to a missing route would crash. This
- * says so honestly instead. The backend endpoints behind all four already exist.
- */
-function notBuiltYet(feature: string): void {
-  Alert.alert(
-    `${feature} is not in this build`,
-    'The API for this is ready, but the screen has not been built yet.',
-    [{ text: 'OK' }],
-  );
 }
 
 export default function StudentDashboardScreen() {
@@ -155,7 +139,7 @@ export default function StudentDashboardScreen() {
           <View style={styles.spacer} />
           <Button
             label="Register Internship"
-            onPress={() => notBuiltYet('The registration wizard')}
+            onPress={() => router.push('/(student)/internship/register')}
           />
         </Card>
       ) : null}
@@ -179,7 +163,7 @@ export default function StudentDashboardScreen() {
               <View style={styles.spacer} />
               <Button
                 label="Update registration"
-                onPress={() => notBuiltYet('The registration wizard')}
+                onPress={() => router.push('/(student)/internship/register')}
               />
             </>
           ) : (
@@ -260,7 +244,7 @@ export default function StudentDashboardScreen() {
               <Button
                 label={dashboard.currentWeek.dueSoon ? 'Submit weekly report' : 'Open weekly report'}
                 variant={dashboard.currentWeek.dueSoon ? 'primary' : 'secondary'}
-                onPress={() => notBuiltYet('The weekly report form')}
+                onPress={() => router.push('/(student)/weekly-report/list')}
               />
             </>
           )}
@@ -277,7 +261,7 @@ export default function StudentDashboardScreen() {
           <View style={styles.spacer} />
           <Button
             label="Start final assessment"
-            onPress={() => notBuiltYet('The final assessment form')}
+            onPress={() => router.push('/(student)/final-assessment')}
           />
         </Card>
       ) : null}
@@ -297,7 +281,7 @@ export default function StudentDashboardScreen() {
             label="Documents pending review"
             value={dashboard.pendingDocumentCount}
             tone={dashboard.pendingDocumentCount > 0 ? 'warning' : 'success'}
-            onPress={() => notBuiltYet('The documents checklist')}
+            onPress={() => router.push('/(student)/internship/documents')}
           />
           <SummaryCard
             label="Unread notifications"

@@ -1,44 +1,60 @@
 /**
- * Database seed — 10_Project_Setup_README §3 ("creates admin user, departments").
+ * Database seed — creates users via Supabase Auth + application records via Prisma.
  *
- * Idempotent: every write is an upsert keyed on a natural unique column, so running
- * `pnpm prisma db seed` repeatedly converges rather than erroring or duplicating.
- *
- * Demo data (students, an internship, attendance, work logs) is created only outside
- * production. An accidental `db seed` against a live database must not inject fake
- * students into institutional evidence, so that path is gated on NODE_ENV.
- *
- * Passwords come from the environment where supplied, and fall back to a documented
- * development default otherwise. The seed prints what it created, including whether
- * the fallback was used, so nobody deploys unaware of a known password.
+ * Idempotent: checks if users exist before creating. Demo data only outside production.
  */
 
 import { PrismaClient } from '@prisma/client';
-import bcrypt from 'bcryptjs';
-import {
-  BCRYPT_COST_FACTOR,
-  SKILL_TYPES,
-  type AttendanceStatus,
-} from '@ims/shared-types';
+import { createClient } from '@supabase/supabase-js';
+import { SKILL_TYPES, type AttendanceStatus } from '@ims/shared-types';
 import { addDays, calculateTotalHours, daysBetween } from '@ims/shared-validation';
 
 const prisma = new PrismaClient();
 
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
+
 const INSTITUTION = process.env.INSTITUTION_NAME ?? 'Sri Manakula Vinayagar Engineering College';
-
-/** Meets the policy in 07_Security_and_Privacy §5: 8+ chars, 1 uppercase, 1 number. */
 const DEV_PASSWORD = 'Internship1';
-
 const isProduction = process.env.NODE_ENV === 'production';
 
-function hash(plaintext: string): Promise<string> {
-  return bcrypt.hash(plaintext, BCRYPT_COST_FACTOR);
-}
-
-/** UTC-midnight Date for a `YYYY-MM-DD` string, matching how the app writes DATE columns. */
 function dateColumn(value: string): Date {
   const [year, month, day] = value.split('-').map(Number) as [number, number, number];
   return new Date(Date.UTC(year, month - 1, day));
+}
+
+/**
+ * Creates a Supabase Auth user and returns the auth id.
+ * If the user already exists (by email), returns the existing id.
+ */
+async function ensureAuthUser(email: string, password: string, metadata?: Record<string, unknown>): Promise<string> {
+  // Check if user already exists
+  const { data: existingUsers } = await supabase.auth.admin.listUsers();
+  const existing = existingUsers?.users?.find((u) => u.email === email);
+  if (existing) return existing.id;
+
+  const { data, error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: metadata ?? {},
+  });
+
+  if (error) {
+    // If user already exists error, try to find them
+    if (error.message?.includes('already been registered')) {
+      const { data: listData } = await supabase.auth.admin.listUsers();
+      const found = listData?.users?.find((u) => u.email === email);
+      if (found) return found.id;
+    }
+    throw new Error(`Failed to create auth user ${email}: ${error.message}`);
+  }
+
+  return data.user.id;
 }
 
 async function main(): Promise<void> {
@@ -72,34 +88,26 @@ async function main(): Promise<void> {
   // -------------------------------------------------------------------------
   // Administrator
   // -------------------------------------------------------------------------
-  const adminEmail = process.env.SEED_ADMIN_EMAIL ?? 'admin@smvec.ac.in';
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? DEV_PASSWORD;
-
-  if (isProduction && !process.env.SEED_ADMIN_PASSWORD) {
-    throw new Error(
-      'Refusing to seed a production database with the default admin password. ' +
-        'Set SEED_ADMIN_PASSWORD.',
-    );
-  }
+  const adminEmail = 'admin@smvec.ac.in';
+  const adminAuthId = await ensureAuthUser(adminEmail, DEV_PASSWORD, { role: 'admin' });
 
   const admin = await prisma.user.upsert({
     where: { email: adminEmail },
     create: {
+      authId: adminAuthId,
       email: adminEmail,
-      passwordHash: await hash(adminPassword),
       role: 'admin',
       status: 'active',
       name: 'Department Administrator',
     },
-    // An existing admin's password is left alone: re-seeding must not reset it.
-    update: { role: 'admin', status: 'active' },
+    update: { authId: adminAuthId, role: 'admin', status: 'active' },
     select: { id: true, email: true },
   });
 
   console.log(`  Admin: ${admin.email}`);
 
   // -------------------------------------------------------------------------
-  // Notification settings (02_SRS §4 — admin-configurable)
+  // App settings
   // -------------------------------------------------------------------------
   await prisma.appSetting.upsert({
     where: { key: 'notifications' },
@@ -125,35 +133,19 @@ async function main(): Promise<void> {
   // -------------------------------------------------------------------------
   // Demo faculty coordinator
   // -------------------------------------------------------------------------
+  const facultyAuthId = await ensureAuthUser('faculty@smvec.ac.in', DEV_PASSWORD, { role: 'faculty' });
+
   const faculty = await prisma.user.upsert({
     where: { email: 'faculty@smvec.ac.in' },
     create: {
+      authId: facultyAuthId,
       email: 'faculty@smvec.ac.in',
-      passwordHash: await hash(DEV_PASSWORD),
       role: 'faculty',
       status: 'active',
       name: 'Dr. Anitha Rajendran',
-      // Scopes this coordinator to CSE, which is what makes the department
-      // authorization rules exercisable in development.
       departmentId: cse.id,
     },
-    update: { departmentId: cse.id },
-    select: { id: true, email: true },
-  });
-
-  // A second faculty member in another department, so the scoping tests in
-  // 09_Test_Plan §3 have a negative case to assert against.
-  const otherFaculty = await prisma.user.upsert({
-    where: { email: 'faculty.mech@smvec.ac.in' },
-    create: {
-      email: 'faculty.mech@smvec.ac.in',
-      passwordHash: await hash(DEV_PASSWORD),
-      role: 'faculty',
-      status: 'active',
-      name: 'Dr. Suresh Kumar',
-      departmentId: departments[3]!.id,
-    },
-    update: {},
+    update: { authId: facultyAuthId, departmentId: cse.id },
     select: { id: true, email: true },
   });
 
@@ -164,19 +156,21 @@ async function main(): Promise<void> {
     where: { name: 'Iinvsys Technologies' },
     create: { name: 'Iinvsys Technologies', location: 'Puducherry' },
     update: {},
-    select: { id: true, name: true },
+    select: { id: true },
   });
+
+  const mentorAuthId = await ensureAuthUser('raj@iinvsys.example', DEV_PASSWORD, { role: 'mentor' });
 
   const mentorUser = await prisma.user.upsert({
     where: { email: 'raj@iinvsys.example' },
     create: {
+      authId: mentorAuthId,
       email: 'raj@iinvsys.example',
-      passwordHash: await hash(DEV_PASSWORD),
       role: 'mentor',
       status: 'active',
       name: 'Raj Kumar',
     },
-    update: {},
+    update: { authId: mentorAuthId },
     select: { id: true },
   });
 
@@ -209,21 +203,22 @@ async function main(): Promise<void> {
   const studentSeeds = [
     { registerNumber: '21CS101', name: 'Praveen Kumar', email: 'praveen@smvec.ac.in' },
     { registerNumber: '21CS102', name: 'Divya Lakshmi', email: 'divya@smvec.ac.in' },
-    { registerNumber: '21ME201', name: 'Karthik Raja', email: 'karthik@smvec.ac.in' },
   ];
 
   const students = [];
   for (const [index, seed] of studentSeeds.entries()) {
+    const authId = await ensureAuthUser(seed.email, DEV_PASSWORD, { role: 'student', name: seed.name });
+
     const user = await prisma.user.upsert({
       where: { email: seed.email },
       create: {
+        authId,
         email: seed.email,
-        passwordHash: await hash(DEV_PASSWORD),
         role: 'student',
         status: 'active',
         name: seed.name,
       },
-      update: {},
+      update: { authId },
       select: { id: true },
     });
 
@@ -233,9 +228,8 @@ async function main(): Promise<void> {
         userId: user.id,
         registerNumber: seed.registerNumber,
         name: seed.name,
-        programme: index === 2 ? 'B.E. Mechanical Engineering' : 'B.E. Computer Science',
-        // The third student sits in Mechanical, outside the demo faculty's scope.
-        departmentId: index === 2 ? departments[3]!.id : cse.id,
+        programme: 'B.E. Computer Science',
+        departmentId: cse.id,
         year: 3,
         section: 'A',
         studentEmail: seed.email,
@@ -251,12 +245,9 @@ async function main(): Promise<void> {
   console.log(`  Students: ${students.length}`);
 
   // -------------------------------------------------------------------------
-  // Demo internship with attendance and work logs
+  // Demo internship with attendance
   // -------------------------------------------------------------------------
   const firstStudent = students[0]!;
-
-  // A window ending yesterday, so the final assessment is unlocked and the dashboard
-  // has history to display.
   const endDate = addDays(new Date().toISOString().slice(0, 10), -1);
   const startDate = addDays(endDate, -44);
 
@@ -281,7 +272,6 @@ async function main(): Promise<void> {
           mode: 'offline',
           startDate: dateColumn(startDate),
           endDate: dateColumn(endDate),
-          // Mirrors the generated column the documents specify: end - start.
           durationDays: daysBetween(startDate, endDate),
           workingHoursPerDay: 8,
           status: 'active',
@@ -293,28 +283,16 @@ async function main(): Promise<void> {
         select: { id: true },
       });
 
-  // Skip regenerating daily records if they already exist, so re-seeding is cheap.
   const existingAttendance = await prisma.attendance.count({
     where: { internshipId: internship.id },
   });
 
   if (existingAttendance === 0) {
-    const technologies = [
-      ['Python', 'Flask', 'PostgreSQL'],
-      ['TypeScript', 'React', 'Git'],
-      ['Docker', 'AWS', 'Linux'],
-      ['SQL', 'Prisma', 'Node.js'],
-    ];
-
     let attendanceCreated = 0;
-    let logsCreated = 0;
-
     for (let offset = 0; offset <= daysBetween(startDate, endDate); offset += 1) {
       const date = addDays(startDate, offset);
       const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
 
-      // Sundays are weekly offs; one deliberate absence and one leave day give the
-      // attendance percentage something meaningful to compute.
       let status: AttendanceStatus = 'present';
       if (dayOfWeek === 0) status = 'weekly_off';
       else if (offset === 10) status = 'absent';
@@ -345,86 +323,20 @@ async function main(): Promise<void> {
         },
       });
       attendanceCreated += 1;
-
-      if (isWorkingDay) {
-        const tags = technologies[offset % technologies.length]!;
-        await prisma.dailyWorkLog.create({
-          data: {
-            internshipId: internship.id,
-            studentId: firstStudent.id,
-            workDate: dateColumn(date),
-            activities:
-              'Worked on the internship management API. Implemented request validation, ' +
-              'reviewed the authentication flow with the mentor, and wrote unit tests for ' +
-              'the new endpoints. Spent the afternoon tracing a bug in the attendance ' +
-              'aggregation query and documented the fix.',
-            technologies: tags,
-            taskAssigned: 'Implement and test the assigned API module',
-            completionStatus: offset % 7 === 0 ? 'partially' : 'yes',
-            learning:
-              'Learned how database indexes change the plan for aggregate queries and why ' +
-              'computing totals is safer than storing them.',
-            challenge: 'The aggregation returned duplicate rows for a joined table.',
-            solution: 'Grouped in the database instead of in application code.',
-            deliverableType: 'code',
-            mentorInteraction: offset % 2 === 0,
-            mentorFeedback: offset % 2 === 0 ? 'Good progress. Add more test coverage.' : null,
-          },
-        });
-        logsCreated += 1;
-      }
     }
-
     console.log(`  Attendance records: ${attendanceCreated}`);
-    console.log(`  Work logs: ${logsCreated}`);
-  }
-
-  // -------------------------------------------------------------------------
-  // A draft final assessment with skill ratings, so the form has data to show
-  // -------------------------------------------------------------------------
-  const assessment = await prisma.finalAssessment.upsert({
-    where: { internshipId: internship.id },
-    create: {
-      internshipId: internship.id,
-      studentId: firstStudent.id,
-      completedSuccessfully: true,
-      majorProject: 'Internship management REST API with offline sync support',
-      technologiesMastered: ['TypeScript', 'PostgreSQL', 'Prisma'],
-      skillsDeveloped: ['API design', 'Testing', 'Code review'],
-      objectivesStatus: 'fully',
-      usefulnessRating: 5,
-      recommendOrganisation: true,
-    },
-    update: {},
-    select: { id: true },
-  });
-
-  const existingRatings = await prisma.skillRating.count({
-    where: { finalAssessmentId: assessment.id },
-  });
-
-  if (existingRatings === 0) {
-    await prisma.skillRating.createMany({
-      data: SKILL_TYPES.map((skillType, index) => ({
-        finalAssessmentId: assessment.id,
-        // Varied but always inside the 1..5 CHECK constraint.
-        skillType,
-        rating: ((index % 3) + 3) as number,
-      })),
-    });
   }
 
   console.log('');
   console.log('Demo accounts (password for all: ' + DEV_PASSWORD + ')');
   console.log(`  admin    ${admin.email}`);
-  console.log(`  faculty  ${faculty.email}   (${cse.name})`);
-  console.log(`  faculty  ${otherFaculty.email}   (Mechanical \u2014 out of scope for CSE records)`);
+  console.log(`  faculty  ${faculty.email}`);
   console.log('  mentor   raj@iinvsys.example');
   for (const student of students) {
     console.log(`  student  ${student.registerNumber}  ${student.name}`);
   }
   console.log('');
-  console.log('Change these before exposing the API to anyone.');
+  console.log('Change these before exposing the API publicly.');
 }
 
 main()

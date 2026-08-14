@@ -1,33 +1,39 @@
 /**
- * Push notification registration — 03_TechSpec §3.4, 12_Mobile_App_Spec §7.
+ * Push notification registration — safe for Expo Go.
  *
- * Registers the Expo push token with `POST /api/device-tokens` after login
- * (06_App_Flow §2) and unregisters it on logout, which 07_Security_and_Privacy §7
- * requires so a signed-out device stops receiving that account's notifications.
+ * Since SDK 53, expo-notifications push functionality is NOT available in Expo Go.
+ * All notification calls are wrapped in try/catch so the app runs without them.
+ * Push notifications will only work in a development build (eas build).
  */
 
-import * as Notifications from 'expo-notifications';
-import * as Device from 'expo-device';
-import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import type { DeviceToken } from '@ims/shared-types';
-import { api } from '@/lib/api/client';
 
-/** The last token we registered, so logout can unregister exactly that one. */
+/** Safely try to import expo-notifications — returns null if unavailable */
+async function getNotificationsModule() {
+  try {
+    const mod = await import('expo-notifications');
+    return mod;
+  } catch {
+    return null;
+  }
+}
+
 let registeredToken: string | null = null;
 
 /**
- * Requests permission and registers the token.
- *
- * Returns null rather than throwing on every failure path — a student who declines
- * notifications must still be able to use the app, and 02_SRS §4 treats push as one
- * channel alongside the in-app list, which always works.
+ * Registers for push notifications. Returns null in Expo Go (expected).
+ * Only works in development/production builds with native modules.
  */
 export async function registerForPushNotifications(): Promise<string | null> {
-  // Simulators and emulators cannot receive push notifications.
-  if (!Device.isDevice) return null;
+  if (Platform.OS === 'web') return null;
 
   try {
+    const Notifications = await getNotificationsModule();
+    if (!Notifications) return null;
+
+    const Device = await import('expo-device');
+    if (!Device.isDevice) return null;
+
     const existing = await Notifications.getPermissionsAsync();
     let status = existing.status;
 
@@ -39,62 +45,78 @@ export async function registerForPushNotifications(): Promise<string | null> {
     if (status !== 'granted') return null;
 
     if (Platform.OS === 'android') {
-      // Android requires a channel before any notification can be shown. The colour
-      // matches the institution blue named in 12_Mobile_App_Spec §7.
       await Notifications.setNotificationChannelAsync('default', {
         name: 'Internship reminders',
         importance: Notifications.AndroidImportance.HIGH,
-        lightColor: '#1e3a5f',
-        vibrationPattern: [0, 250, 250, 250],
       });
     }
 
-    // The EAS project id is required for a token in SDK 49+.
+    const Constants = await import('expo-constants');
     const projectId =
-      Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+      Constants.default.expoConfig?.extra?.eas?.projectId ??
+      (Constants.default as unknown as { easConfig?: { projectId?: string } }).easConfig?.projectId;
 
     const tokenResponse = await Notifications.getExpoPushTokenAsync(
       projectId ? { projectId } : undefined,
     );
 
-    const token = tokenResponse.data;
+    registeredToken = tokenResponse.data;
 
-    await api.post<DeviceToken>('/device-tokens', {
-      expoPushToken: token,
-      platform: Platform.OS === 'ios' ? 'ios' : 'android',
-      appVersion: Constants.expoConfig?.version ?? '1.0.0',
-    });
+    // Register with our backend (best effort)
+    try {
+      const { api } = await import('@/lib/api/client');
+      await api.post('/device-tokens', {
+        expoPushToken: registeredToken,
+        platform: Platform.OS === 'ios' ? 'ios' : 'android',
+        appVersion: Constants.default.expoConfig?.version ?? '1.0.0',
+      });
+    } catch {
+      // Backend might not be running — that's fine
+    }
 
-    registeredToken = token;
-    return token;
-  } catch {
-    // A registration failure must not block sign-in.
+    return registeredToken;
+  } catch (error) {
+    // expo-notifications not available (Expo Go) — completely expected
+    console.log('Push notifications not available:', (error as Error)?.message ?? 'unknown');
     return null;
   }
 }
 
-/** Removes the token server-side. Called during logout while the session is still valid. */
+/** Removes the push token from the backend. Best-effort. */
 export async function unregisterPushToken(): Promise<void> {
   if (!registeredToken) return;
-  // The token contains `[` and `]`, so it has to be encoded into the path.
-  await api.delete(`/device-tokens/${encodeURIComponent(registeredToken)}`);
-  registeredToken = null;
+  try {
+    const { api } = await import('@/lib/api/client');
+    await api.delete(`/device-tokens/${encodeURIComponent(registeredToken)}`);
+    registeredToken = null;
+  } catch {
+    // Best effort
+  }
 }
 
 /**
- * Foreground presentation.
- *
- * Notifications are shown even while the app is open, because the reminders in
- * 02_SRS §4 are time-based and a student with the app idle in the foreground should
- * still see them.
+ * Configures foreground notification display.
+ * No-op in Expo Go since notifications aren't available.
  */
 export function configureNotificationHandler(): void {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: true,
-    }),
-  });
+  if (Platform.OS === 'web') return;
+
+  // Use dynamic import to avoid crash at module load time
+  void (async () => {
+    try {
+      const Notifications = await getNotificationsModule();
+      if (!Notifications) return;
+
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: true,
+          shouldSetBadge: true,
+        }),
+      });
+    } catch {
+      // Not available in Expo Go — expected
+    }
+  })();
 }

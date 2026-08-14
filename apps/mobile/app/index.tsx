@@ -1,39 +1,62 @@
 /**
- * Launch router — implements the decision tree in 06_App_Flow §2.
- *
- *   Token valid?
- *     YES -> role check -> student | faculty | mentor | admin dashboard
- *     NO  -> login
- *
- * The session restore has already finished by the time this renders (the root layout
- * holds the splash screen until then), so this is a pure redirect with no loading state
- * of its own.
- *
- * Admin is routed to the faculty dashboard. 01_PRD §3 puts the admin on "Web
- * (mobile-accessible)", so the mobile app gives an admin the faculty view rather than
- * a stub — the faculty dashboard is unscoped for admins server-side anyway.
+ * Launch router — checks Supabase session and routes accordingly.
  */
 
+import { useEffect, useState } from 'react';
 import { Redirect } from 'expo-router';
-import { useAuthStore } from '@/stores/authStore';
+import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { colors } from '@/constants/theme';
 
 export default function Index() {
-  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const user = useAuthStore((state) => state.user);
+  const [route, setRoute] = useState<string | null>(null);
 
-  if (!isAuthenticated || !user) {
-    return <Redirect href="/(auth)/login" />;
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const { getSupabase } = await import('@/lib/supabase');
+        const supabase = getSupabase();
+        const { data: { session } } = await supabase.auth.getSession();
+
+        if (!session) {
+          setRoute('/(auth)/login');
+          return;
+        }
+
+        // Try to get user role from metadata
+        const role = session.user.user_metadata?.role as string ?? 'student';
+
+        switch (role) {
+          case 'faculty':
+          case 'admin':
+            setRoute('/(faculty)/dashboard');
+            break;
+          case 'mentor':
+            setRoute('/(mentor)/dashboard');
+            break;
+          default:
+            setRoute('/(student)/dashboard');
+        }
+      } catch {
+        setRoute('/(auth)/login');
+      }
+    };
+
+    void check();
+  }, []);
+
+  if (!route) {
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={styles.text}>Loading...</Text>
+      </View>
+    );
   }
 
-  switch (user.role) {
-    case 'student':
-      return <Redirect href="/(student)/dashboard" />;
-    case 'faculty':
-    case 'admin':
-      return <Redirect href="/(faculty)/dashboard" />;
-    case 'mentor':
-      return <Redirect href="/(mentor)/dashboard" />;
-    default:
-      return <Redirect href="/(auth)/login" />;
-  }
+  return <Redirect href={route as never} />;
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
+  text: { marginTop: 12, color: colors.textMuted, fontSize: 14 },
+});
