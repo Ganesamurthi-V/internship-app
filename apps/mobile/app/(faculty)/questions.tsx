@@ -10,9 +10,8 @@
 
 import { useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import type { Question, QuestionType, DocumentMeta } from '@ims/shared-types';
+import type { Question, QuestionType } from '@ims/shared-types';
 import {
   ANSWER_MAX_LENGTH,
   MAX_ACTIVE_QUESTIONS,
@@ -32,7 +31,6 @@ import {
   useQuestions,
   useUpdateQuestion,
 } from '@/lib/api/hooks';
-import { uploadFile, validateFile, type PickedFile } from '@/lib/api/upload';
 import { colors, fontSize, radius, spacing } from '@/constants/theme';
 
 const TYPE_OPTIONS = QUESTION_TYPES.map((type) => ({
@@ -52,9 +50,7 @@ export default function QuestionsScreen() {
   const [helpText, setHelpText] = useState('');
   const [type, setType] = useState<QuestionType>('long_text');
   const [required, setRequired] = useState(true);
-  const [optionsText, setOptionsText] = useState('');
-  const [referenceFile, setReferenceFile] = useState<DocumentMeta | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [choiceOptions, setChoiceOptions] = useState<string[]>(['', '']);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const active = (questions ?? []).filter((question) => question.isActive);
@@ -65,43 +61,9 @@ export default function QuestionsScreen() {
     setHelpText('');
     setType('long_text');
     setRequired(true);
-    setOptionsText('');
-    setReferenceFile(null);
+    setChoiceOptions(['', '']);
     setErrors({});
     setShowForm(false);
-  };
-
-  const onPickReferenceFile = async (): Promise<void> => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: ['application/pdf', 'image/jpeg', 'image/png', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-      copyToCacheDirectory: true,
-      multiple: false,
-    });
-
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
-    const file: PickedFile = {
-      uri: asset.uri,
-      name: asset.name,
-      mimeType: asset.mimeType ?? 'application/octet-stream',
-      size: asset.size ?? 0,
-    };
-
-    // Allow docx too for questions (even though submissions only accept PDF/images)
-    if (file.size > 10 * 1024 * 1024) {
-      Alert.alert('File too large', 'The file must be 10 MB or smaller.');
-      return;
-    }
-
-    setUploading(true);
-    try {
-      const doc = await uploadFile(file);
-      setReferenceFile(doc);
-    } catch (err) {
-      Alert.alert('Upload failed', err instanceof Error ? err.message : 'Try again.');
-    } finally {
-      setUploading(false);
-    }
   };
 
   const onCreate = async (): Promise<void> => {
@@ -115,14 +77,13 @@ export default function QuestionsScreen() {
 
     const options =
       type === 'choice'
-        ? optionsText
-            .split('\n')
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0)
+        ? choiceOptions
+            .map((opt) => opt.trim())
+            .filter((opt) => opt.length > 0)
         : undefined;
 
     if (type === 'choice' && (!options || options.length < 2)) {
-      setErrors({ options: 'A choice question needs at least two options, one per line.' });
+      setErrors({ options: 'Add at least two options.' });
       return;
     }
 
@@ -137,7 +98,7 @@ export default function QuestionsScreen() {
         minLength: null,
         maxLength: type === 'long_text' ? ANSWER_MAX_LENGTH : null,
         departmentId: null,
-        referenceDocId: referenceFile?.id ?? null,
+        referenceDocId: null,
       });
       resetForm();
     } catch (error) {
@@ -225,16 +186,53 @@ export default function QuestionsScreen() {
           />
 
           {type === 'choice' ? (
-            <TextField
-              label="Options"
-              value={optionsText}
-              onChangeText={setOptionsText}
-              multiline
-              placeholder={'One per line, e.g.\nOffice\nRemote\nHybrid'}
-              helper="One option per line. At least two."
-              error={errors.options}
-              required
-            />
+            <View style={styles.optionsSection}>
+              <Text style={styles.optionsLabel}>
+                Options <Text style={styles.required}>*</Text>
+              </Text>
+              {choiceOptions.map((option, index) => (
+                <View key={index} style={styles.optionRow}>
+                  <View style={styles.optionInputWrap}>
+                    <TextField
+                      label=""
+                      value={option}
+                      onChangeText={(text) => {
+                        const next = [...choiceOptions];
+                        next[index] = text;
+                        setChoiceOptions(next);
+                      }}
+                      placeholder={`Option ${index + 1}`}
+                    />
+                  </View>
+                  {choiceOptions.length > 2 ? (
+                    <Text
+                      style={styles.optionRemove}
+                      onPress={() => {
+                        setChoiceOptions(choiceOptions.filter((_, i) => i !== index));
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove option ${index + 1}`}
+                    >
+                      ✕
+                    </Text>
+                  ) : null}
+                </View>
+              ))}
+              {choiceOptions.length < 10 ? (
+                <View style={styles.addOptionRow}>
+                  <Text
+                    style={styles.addOptionLink}
+                    onPress={() => setChoiceOptions([...choiceOptions, ''])}
+                    accessibilityRole="button"
+                  >
+                    + Add option
+                  </Text>
+                </View>
+              ) : null}
+              {errors.options ? (
+                <Text style={styles.fieldError}>{errors.options}</Text>
+              ) : null}
+            </View>
           ) : null}
 
           <ChipGroup
@@ -246,40 +244,6 @@ export default function QuestionsScreen() {
             value={required ? 'yes' : 'no'}
             onChange={(next) => setRequired(next === 'yes')}
           />
-
-          {/* ---- Reference file attachment ---- */}
-          <View style={styles.fileSection}>
-            <Text style={styles.fileSectionLabel}>Reference file (optional)</Text>
-            <Text style={styles.fileSectionHelp}>
-              Attach a PDF, image or document that students should read as part of this question.
-            </Text>
-            {referenceFile ? (
-              <View style={styles.fileRow}>
-                <MaterialIcons
-                  name={referenceFile.mimeType === 'application/pdf' ? 'picture-as-pdf' : 'insert-drive-file'}
-                  size={20}
-                  color={colors.success}
-                />
-                <Text style={styles.fileName} numberOfLines={1}>
-                  {referenceFile.originalFilename}
-                </Text>
-                <Text
-                  style={styles.removeLink}
-                  onPress={() => setReferenceFile(null)}
-                  accessibilityRole="button"
-                >
-                  Remove
-                </Text>
-              </View>
-            ) : (
-              <Button
-                label={uploading ? 'Uploading\u2026' : 'Attach file'}
-                variant="secondary"
-                loading={uploading}
-                onPress={() => void onPickReferenceFile()}
-              />
-            )}
-          </View>
 
           {errors._ ? (
             <View accessibilityLiveRegion="polite">
@@ -377,19 +341,6 @@ function QuestionCard({
         <Text style={styles.options}>{question.options.join(' \u00b7 ')}</Text>
       ) : null}
 
-      {question.referenceDoc ? (
-        <View style={styles.fileRow}>
-          <MaterialIcons
-            name={question.referenceDoc.mimeType === 'application/pdf' ? 'picture-as-pdf' : 'insert-drive-file'}
-            size={18}
-            color={colors.info}
-          />
-          <Text style={styles.fileName} numberOfLines={1}>
-            {question.referenceDoc.originalFilename}
-          </Text>
-        </View>
-      ) : null}
-
       <View style={styles.actionRow}>
         <Text style={styles.actionLink} onPress={onToggle} accessibilityRole="button">
           {question.isActive ? 'Retire' : 'Reactivate'}
@@ -460,18 +411,19 @@ const styles = StyleSheet.create({
   },
   actionLink: { fontSize: fontSize.small, color: colors.primary, fontWeight: '700' },
   actionDanger: { fontSize: fontSize.small, color: colors.danger, fontWeight: '700' },
-  fileSection: { marginBottom: spacing.lg },
-  fileSectionLabel: { fontSize: fontSize.small, fontWeight: '600', color: colors.text, marginBottom: spacing.xs },
-  fileSectionHelp: { fontSize: fontSize.caption, color: colors.textMuted, marginBottom: spacing.md, lineHeight: 18 },
-  fileRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    marginTop: spacing.sm,
+  optionsSection: { marginBottom: spacing.lg },
+  optionsLabel: { fontSize: fontSize.small, fontWeight: '600', color: colors.text, marginBottom: spacing.sm },
+  required: { color: colors.danger },
+  optionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  optionInputWrap: { flex: 1 },
+  optionRemove: {
+    fontSize: 18,
+    color: colors.danger,
+    fontWeight: '700',
+    paddingHorizontal: spacing.sm,
+    paddingBottom: spacing.lg,
   },
-  fileName: { flex: 1, fontSize: fontSize.small, color: colors.text, fontWeight: '600' },
-  removeLink: { fontSize: fontSize.small, color: colors.danger, fontWeight: '700' },
+  addOptionRow: { marginTop: spacing.xs },
+  addOptionLink: { fontSize: fontSize.small, color: colors.primary, fontWeight: '700' },
+  fieldError: { marginTop: spacing.xs, fontSize: fontSize.small, color: colors.danger },
 });

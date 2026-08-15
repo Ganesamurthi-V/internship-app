@@ -15,7 +15,6 @@ import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import type { DocumentMeta, Question } from '@ims/shared-types';
-import { MAX_FILES_PER_SUBMISSION } from '@ims/shared-types';
 import { answerValidatorFor } from '@ims/shared-validation';
 import { Screen } from '@/components/shared/Screen';
 import { Card } from '@/components/ui/Card';
@@ -24,7 +23,7 @@ import { TextField } from '@/components/ui/TextField';
 import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { ApiError } from '@/lib/api/client';
-import { useSubmitAnswers, useTodayForm, useUnattachedDocuments, useDeleteDocument } from '@/lib/api/hooks';
+import { useSubmitAnswers, useTodayForm } from '@/lib/api/hooks';
 import { uploadFile, validateFile, type PickedFile } from '@/lib/api/upload';
 import { colors, fontSize, radius, spacing } from '@/constants/theme';
 
@@ -33,14 +32,14 @@ export default function AnswerScreen() {
   const todayKey = new Date().toISOString().slice(0, 10);
   const { data: form, isLoading, error, refetch } = useTodayForm(todayKey);
 
-  const { data: stagedFiles } = useUnattachedDocuments();
   const submit = useSubmitAnswers();
-  const removeFile = useDeleteDocument();
 
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  /** Maps questionId → uploaded file metadata for file_upload type questions */
+  const [uploadedFileMap, setUploadedFileMap] = useState<Record<string, DocumentMeta>>({});
 
   /**
    * Seeds the form from an existing submission so a resubmission starts from what
@@ -85,13 +84,8 @@ export default function AnswerScreen() {
     (question) => question.required && (localErrors[question.id] || !answers[question.id]?.trim()),
   );
 
-  const onPickFile = async (): Promise<void> => {
-    const staged = stagedFiles ?? [];
-    if (staged.length >= MAX_FILES_PER_SUBMISSION) {
-      Alert.alert('Too many files', `You can attach up to ${MAX_FILES_PER_SUBMISSION} files.`);
-      return;
-    }
-
+  /** Handles file pick for a file_upload type question */
+  const onPickFileForQuestion = async (questionId: string): Promise<void> => {
     const result = await DocumentPicker.getDocumentAsync({
       type: ['application/pdf', 'image/jpeg', 'image/png', 'image/heic'],
       copyToCacheDirectory: true,
@@ -116,7 +110,10 @@ export default function AnswerScreen() {
 
     setUploading(true);
     try {
-      await uploadFile(file);
+      const doc = await uploadFile(file);
+      // Store the document ID as the "answer" and keep the metadata for display
+      setAnswers((prev) => ({ ...prev, [questionId]: doc.id }));
+      setUploadedFileMap((prev) => ({ ...prev, [questionId]: doc }));
     } catch (uploadError) {
       Alert.alert(
         'Upload failed',
@@ -148,7 +145,6 @@ export default function AnswerScreen() {
     try {
       await submit.mutateAsync({
         answers: payload,
-        documentIds: (stagedFiles ?? []).map((file) => file.id),
       });
 
       Alert.alert(
@@ -191,9 +187,6 @@ export default function AnswerScreen() {
 
   if (!form) return null;
 
-  const staged = stagedFiles ?? [];
-  const attached = form.submission?.documents ?? [];
-
   return (
     <Screen>
       {/* ---- Existing decision, if any ---- */}
@@ -228,50 +221,16 @@ export default function AnswerScreen() {
           value={answers[question.id] ?? ''}
           error={fieldErrors[question.id]}
           editable={form.canSubmit}
-          onChange={(value) => setAnswers((prev) => ({ ...prev, [question.id]: value }))}
+          onChange={(value) => {
+            if (value === '__pick_file__') {
+              void onPickFileForQuestion(question.id);
+            } else {
+              setAnswers((prev) => ({ ...prev, [question.id]: value }));
+            }
+          }}
+          uploadedFiles={uploadedFileMap}
         />
       ))}
-
-      {/* ---- Attachments ---- */}
-      <Card title="Files" subtitle={`Optional \u00b7 up to ${MAX_FILES_PER_SUBMISSION}`}>
-        {attached.length > 0 ? (
-          <>
-            <Text style={styles.fileGroupLabel}>Attached to this submission</Text>
-            {attached.map((file) => (
-              <FileRow key={file.id} file={file} />
-            ))}
-          </>
-        ) : null}
-
-        {staged.length > 0 ? (
-          <>
-            <Text style={styles.fileGroupLabel}>Ready to attach</Text>
-            {staged.map((file) => (
-              <FileRow
-                key={file.id}
-                file={file}
-                onRemove={() => void removeFile.mutateAsync(file.id)}
-              />
-            ))}
-          </>
-        ) : null}
-
-        {attached.length === 0 && staged.length === 0 ? (
-          <Text style={styles.muted}>No files attached.</Text>
-        ) : null}
-
-        {form.canSubmit ? (
-          <>
-            <View style={styles.spacer} />
-            <Button
-              label={uploading ? 'Uploading\u2026' : 'Attach a file'}
-              variant="secondary"
-              loading={uploading}
-              onPress={() => void onPickFile()}
-            />
-          </>
-        ) : null}
-      </Card>
 
       {/* ---- Submit ---- */}
       {form.canSubmit ? (
@@ -307,6 +266,7 @@ function QuestionField({
   error,
   editable,
   onChange,
+  uploadedFiles,
 }: {
   index: number;
   question: Question;
@@ -314,6 +274,7 @@ function QuestionField({
   error: string | undefined;
   editable: boolean;
   onChange: (value: string) => void;
+  uploadedFiles: Record<string, DocumentMeta>;
 }) {
   const counter =
     question.maxLength && (question.type === 'text' || question.type === 'long_text') ? (
@@ -326,6 +287,79 @@ function QuestionField({
         {value.length}/{question.maxLength}
       </Text>
     ) : null;
+
+  // File upload question — shows a file picker button, not a text field
+  if (question.type === 'file_upload') {
+    const fileInfo = uploadedFiles[question.id];
+    return (
+      <Card>
+        <Text style={styles.questionPrompt}>
+          {index}. {question.prompt}
+          {question.required ? <Text style={styles.required}> *</Text> : null}
+        </Text>
+        {question.helpText ? <Text style={styles.questionHelp}>{question.helpText}</Text> : null}
+        <View style={styles.spacer} />
+
+        {fileInfo ? (
+          <View style={styles.uploadedFileRow}>
+            <MaterialIcons
+              name={fileInfo.mimeType === 'application/pdf' ? 'picture-as-pdf' : 'image'}
+              size={22}
+              color={colors.success}
+            />
+            <View style={styles.fileInfo}>
+              <Text style={styles.fileName} numberOfLines={1}>
+                {fileInfo.originalFilename}
+              </Text>
+              <Text style={styles.fileSize}>{formatSize(fileInfo.sizeBytes)}</Text>
+            </View>
+            {editable ? (
+              <Text
+                style={styles.changeLink}
+                onPress={() => onChange('')}
+                accessibilityRole="button"
+              >
+                Change
+              </Text>
+            ) : null}
+          </View>
+        ) : value.length > 0 ? (
+          // Has a document ID from a previous submission but we don't have the metadata
+          <View style={styles.uploadedFileRow}>
+            <MaterialIcons name="attach-file" size={22} color={colors.success} />
+            <Text style={styles.fileName}>File attached</Text>
+            {editable ? (
+              <Text
+                style={styles.changeLink}
+                onPress={() => onChange('')}
+                accessibilityRole="button"
+              >
+                Change
+              </Text>
+            ) : null}
+          </View>
+        ) : editable ? (
+          <Button
+            label="Choose file (PDF, JPG, PNG)"
+            variant="secondary"
+            onPress={() => {
+              // This triggers the parent's onPickFileForQuestion
+              // We pass it through the onChange with a special marker
+              onChange('__pick_file__');
+            }}
+          />
+        ) : (
+          <Text style={styles.muted}>No file uploaded.</Text>
+        )}
+
+        {error ? (
+          <View accessibilityLiveRegion="polite">
+            <Text style={styles.fieldError}>{error}</Text>
+          </View>
+        ) : null}
+      </Card>
+    );
+  }
 
   if (question.type === 'choice') {
     return (
@@ -358,39 +392,29 @@ function QuestionField({
       <TextField
         label=""
         value={value}
-        onChangeText={onChange}
+        onChangeText={(text) => {
+          // For number questions, strip everything except digits, a single decimal
+          // point and an optional leading minus sign.
+          if (question.type === 'number') {
+            const cleaned = text.replace(/[^0-9.\-]/g, '')
+              // Only one decimal point
+              .replace(/(\..*?)\.+/g, '$1')
+              // Minus only at the start
+              .replace(/(.+)-/g, '$1');
+            onChange(cleaned);
+          } else {
+            onChange(text);
+          }
+        }}
         editable={editable}
         multiline={question.type === 'long_text'}
-        keyboardType={question.type === 'number' ? 'numeric' : 'default'}
+        keyboardType={question.type === 'number' ? 'decimal-pad' : 'default'}
         placeholder={question.type === 'number' ? 'e.g. 8' : 'Type your answer'}
         error={error}
         accessory={counter}
         accessibilityLabel={question.prompt}
       />
     </Card>
-  );
-}
-
-function FileRow({ file, onRemove }: { file: DocumentMeta; onRemove?: () => void }) {
-  return (
-    <View style={styles.fileRow}>
-      <MaterialIcons
-        name={file.mimeType === 'application/pdf' ? 'picture-as-pdf' : 'image'}
-        size={20}
-        color={colors.textMuted}
-      />
-      <View style={styles.fileInfo}>
-        <Text style={styles.fileName} numberOfLines={1}>
-          {file.originalFilename}
-        </Text>
-        <Text style={styles.fileSize}>{formatSize(file.sizeBytes)}</Text>
-      </View>
-      {onRemove ? (
-        <Text style={styles.removeLink} onPress={onRemove} accessibilityRole="button">
-          Remove
-        </Text>
-      ) : null}
-    </View>
   );
 }
 
@@ -450,24 +474,17 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   lockedText: { flex: 1, fontSize: fontSize.small, color: colors.text, lineHeight: 19 },
-  fileGroupLabel: {
-    fontSize: fontSize.caption,
-    fontWeight: '700',
-    color: colors.textMuted,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
-    textTransform: 'uppercase',
-  },
-  fileRow: {
+  uploadedFileRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingVertical: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.successBg,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
   },
   fileInfo: { flex: 1 },
   fileName: { fontSize: fontSize.small, color: colors.text, fontWeight: '600' },
   fileSize: { fontSize: fontSize.caption, color: colors.textMuted },
-  removeLink: { fontSize: fontSize.small, color: colors.danger, fontWeight: '700' },
+  changeLink: { fontSize: fontSize.small, color: colors.primary, fontWeight: '700' },
 });

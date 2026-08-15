@@ -77,6 +77,7 @@ enum QuestionType {
   long_text
   number
   choice
+  file_upload
 }
 
 // =============================================================================

@@ -77,7 +77,7 @@ export type ReviewDecision = (typeof REVIEW_DECISIONS)[number];
  * line; `number` accepts a numeric string; `choice` requires the answer to be one
  * of the question's `options`.
  */
-export const QUESTION_TYPES = ['text', 'long_text', 'number', 'choice'] as const;
+export const QUESTION_TYPES = ['text', 'long_text', 'number', 'choice', 'file_upload'] as const;
 export type QuestionType = (typeof QUESTION_TYPES)[number];
 
 export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
@@ -85,6 +85,7 @@ export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   long_text: 'Paragraph',
   number: 'Number',
   choice: 'Choice',
+  file_upload: 'File upload',
 };
 
 // ---------------------------------------------------------------------------

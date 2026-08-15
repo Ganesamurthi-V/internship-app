@@ -167,6 +167,26 @@ export function answerValidatorFor(question: {
   const min = question.required ? (question.minLength ?? ANSWER_MIN_LENGTH) : 0;
   const max = question.maxLength ?? ANSWER_MAX_LENGTH;
 
+  // For file_upload questions, the "answer" is the document ID (UUID).
+  // The actual file is uploaded separately; here we just validate that a valid ID was provided.
+  if (question.type === 'file_upload') {
+    return z
+      .string()
+      .transform((value) => value.trim())
+      .superRefine((value, ctx) => {
+        if (value.length === 0) {
+          if (question.required) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Upload a file.' });
+          }
+          return;
+        }
+        // Must be a valid UUID
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid file reference.' });
+        }
+      });
+  }
+
   if (question.type === 'choice') {
     const options = question.options ?? [];
     return z

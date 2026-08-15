@@ -20,12 +20,13 @@ import { colors, fontSize, spacing } from '@/constants/theme';
 
 export default function StudentDashboardScreen() {
   const user = useAuthStore((state) => state.user);
+  const logout = useAuthStore((state) => state.logout);
   const { data, isLoading, isRefetching, refetch, error } = useDashboard();
 
   const dashboard =
     data?.role === 'student' ? (data.dashboard as StudentDashboardData) : null;
 
-  if (isLoading && !dashboard) {
+  if (isLoading) {
     return (
       <Screen>
         <Text style={styles.muted}>Loading\u2026</Text>
@@ -33,7 +34,7 @@ export default function StudentDashboardScreen() {
     );
   }
 
-  if (error && !dashboard) {
+  if (error) {
     return (
       <Screen>
         <Card title="Could not load your dashboard">
@@ -48,9 +49,24 @@ export default function StudentDashboardScreen() {
   }
 
   if (!dashboard) {
+    // Show diagnostic info so we can tell what went wrong
     return (
       <Screen>
-        <Text style={styles.muted}>No dashboard data available.</Text>
+        <Card title="Dashboard unavailable">
+          <Text style={styles.muted}>
+            {data
+              ? `The server responded with role "${data.role}" but the student dashboard could not be loaded.`
+              : 'No response from the server. Make sure the backend is running and try again.'}
+          </Text>
+          <View style={styles.spacer} />
+          <Button label="Try again" onPress={() => void refetch()} />
+          <View style={styles.spacer} />
+          <Button
+            label="Sign out"
+            variant="danger"
+            onPress={() => { void logout(); router.replace('/(auth)/login'); }}
+          />
+        </Card>
       </Screen>
     );
   }
