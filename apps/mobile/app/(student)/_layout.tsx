@@ -1,42 +1,24 @@
 /**
- * Student tab navigator — 10_Project_Setup_README structure ("_layout.tsx  # Tab
- * navigator for students").
+ * Student tab navigator — 10_Project_Setup_README structure.
  *
- * Four tabs matching the daily rhythm in 06_App_Flow §4: the dashboard checklist,
- * today's attendance, today's work log, and history. Everything else (registration
- * wizard, weekly reports, final assessment, documents, profile) is pushed as a stack
- * screen from those tabs rather than competing for a tab slot.
- *
- * A guard here rather than in each screen: an unauthenticated or non-student user is
- * redirected once, at the group boundary.
+ * Four visible tabs matching the daily rhythm in 06_App_Flow §4: the dashboard,
+ * attendance, work log, and profile. Everything else (internship registration,
+ * documents, weekly reports, final assessment) lives under their own stack layouts
+ * but is hidden from the tab bar — accessed via buttons on the dashboard.
  */
 
 import { Redirect, Tabs } from 'expo-router';
-import { Text, type ColorValue } from 'react-native';
+import { Platform } from 'react-native';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { colors, fontSize } from '@/constants/theme';
 import { useAuthStore } from '@/stores/authStore';
 import { SyncBadge } from '@/components/ui/SyncBadge';
-
-/**
- * Text glyphs stand in for icons.
- *
- * 03_TechSpec §2.1 specifies `@expo/vector-icons`, which is available, but a glyph
- * keeps the tab bar dependency-free and renders identically on both platforms. Swapping
- * in real icons is a one-line change per tab.
- */
-function TabIcon({ glyph, color }: { glyph: string; color: ColorValue }) {
-  return <Text style={{ fontSize: 20, color }}>{glyph}</Text>;
-}
 
 export default function StudentLayout() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const role = useAuthStore((state) => state.user?.role);
 
   if (!isAuthenticated) return <Redirect href="/(auth)/login" />;
-
-  // A staff or mentor account landing here goes straight to its own dashboard.
-  // Redirecting to "/" instead would bounce back through the launch router and can
-  // loop if the role and the group ever disagree.
   if (role === 'faculty' || role === 'admin') return <Redirect href="/(faculty)/dashboard" />;
   if (role === 'mentor') return <Redirect href="/(mentor)/dashboard" />;
 
@@ -45,18 +27,27 @@ export default function StudentLayout() {
       screenOptions={{
         headerStyle: { backgroundColor: colors.primary },
         headerTintColor: colors.onPrimary,
+        headerTitleStyle: { fontWeight: '600' },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,
         tabBarLabelStyle: { fontSize: fontSize.caption, fontWeight: '600' },
-        tabBarStyle: { backgroundColor: colors.surface, borderTopColor: colors.border },
+        tabBarStyle: {
+          backgroundColor: colors.surface,
+          borderTopColor: colors.border,
+          height: Platform.OS === 'ios' ? 88 : 60,
+          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+          paddingTop: 6,
+        },
       }}
     >
+      {/* Visible tabs */}
       <Tabs.Screen
         name="dashboard"
         options={{
           title: 'Today',
-          tabBarIcon: ({ color }) => <TabIcon glyph="\u2637" color={color} />,
-          // Surfaces the pending-sync count on the tab itself, per 06_App_Flow §4.
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="dashboard" size={size} color={color} />
+          ),
           headerRight: () => <SyncBadge compact />,
         }}
       />
@@ -65,7 +56,9 @@ export default function StudentLayout() {
         options={{
           title: 'Attendance',
           headerShown: false,
-          tabBarIcon: ({ color }) => <TabIcon glyph="\u2713" color={color} />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="check-circle" size={size} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -73,17 +66,34 @@ export default function StudentLayout() {
         options={{
           title: 'Work Log',
           headerShown: false,
-          tabBarIcon: ({ color }) => <TabIcon glyph="\u270e" color={color} />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="edit-note" size={size} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color }) => <TabIcon glyph="\u25cf" color={color} />,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="person" size={size} color={color} />
+          ),
         }}
       />
 
+      {/* Hidden from tab bar — accessed via dashboard buttons */}
+      <Tabs.Screen
+        name="internship"
+        options={{ href: null, headerShown: false }}
+      />
+      <Tabs.Screen
+        name="weekly-report"
+        options={{ href: null, headerShown: false }}
+      />
+      <Tabs.Screen
+        name="final-assessment"
+        options={{ href: null, headerShown: false }}
+      />
     </Tabs>
   );
 }

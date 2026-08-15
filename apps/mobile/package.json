@@ -13,6 +13,7 @@
     "prebuild": "expo prebuild"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
     "@hookform/resolvers": "5.8.0",
     "@ims/shared-types": "workspace:*",
     "@ims/shared-validation": "workspace:*",
