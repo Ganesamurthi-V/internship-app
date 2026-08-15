@@ -49,6 +49,11 @@ function identityFromSession(session: {
     email,
     role: ((metadata.role as string) ?? 'student') as UserRole,
     name: (metadata.name as string) ?? email.split('@')[0] ?? 'User',
+    // Assumed active: the session would not exist otherwise. A suspended account is
+    // caught by the API on the first real request.
+    status: 'active',
+    // Not in the JWT. Anything department-scoped waits for `/auth/me`.
+    departmentId: null,
   };
 }
 
@@ -144,14 +149,6 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       clearTokenCache();
     } catch {
       // Non-critical.
-    }
-
-    try {
-      // Drafts belong to the signed-in student; the next user must not see them.
-      const { clearLocalData } = await import('@/lib/db/database');
-      await clearLocalData();
-    } catch {
-      // SQLite may be unavailable; not a reason to block sign-out.
     }
 
     set({ user: null, isAuthenticated: false, error: null });

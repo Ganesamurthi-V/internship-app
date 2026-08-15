@@ -17,7 +17,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing } from '@/constants/theme';
-import { OfflineBanner } from '@/components/ui/OfflineBanner';
 
 interface ScreenProps {
   children: ReactNode;
@@ -25,8 +24,6 @@ interface ScreenProps {
   scroll?: boolean;
   refreshing?: boolean;
   onRefresh?: () => void;
-  /** Hides the connectivity banner, for the login screen where it adds noise. */
-  hideOfflineBanner?: boolean;
   padded?: boolean;
   footer?: ReactNode;
 }
@@ -36,7 +33,6 @@ export function Screen({
   scroll = true,
   refreshing,
   onRefresh,
-  hideOfflineBanner = false,
   padded = true,
   footer,
 }: ScreenProps) {
@@ -65,7 +61,6 @@ export function Screen({
 
   return (
     <View style={styles.container}>
-      {!hideOfflineBanner && <OfflineBanner />}
       {/* `padding` on iOS and `height` on Android is the combination that keeps a
           focused input visible without the layout jumping. */}
       <KeyboardAvoidingView

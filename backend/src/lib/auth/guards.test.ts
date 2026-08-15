@@ -1,44 +1,48 @@
 /**
- * Authorization matrix tests — 09_Test_Plan §3.
+ * Authorization matrix tests.
  *
- * These assert the matrix in 05_API_Spec directly, case by case, because an
- * authorization regression is the failure mode with the worst consequences and the
- * one least likely to be noticed by hand. 09_Test_Plan §9 makes it an MVP gate:
- * "No Authorization Test fails".
+ * These cover `resolveRelation` and `canAccess`, the two pure functions every
+ * authorization decision funnels through. Testing them directly rather than
+ * through routes means the matrix is verified exhaustively without a database.
  *
- * `resolveRelation` and `canAccess` are pure, so the whole matrix can be checked
- * without a database.
+ * The cases that matter most are the negative ones: a student reaching another
+ * student's submission, a faculty member reaching outside their department, and a
+ * reviewer trying to edit answers rather than review them.
  */
 
 import { describe, expect, it } from 'vitest';
-import type { UserRole } from '@ims/shared-types';
-import type { AuthContext } from './context';
 import {
   canAccess,
   canSeeContactDetails,
-  internshipScopeFilter,
+  isAdmin,
+  isFaculty,
+  isReviewer,
+  isStudent,
+  questionScopeFilter,
   resolveRelation,
   studentScopeFilter,
-  type InternshipScope,
+  submissionScopeFilter,
+  type AccessLevel,
   type Relation,
   type ResourceKind,
 } from './guards';
+import type { AuthContext } from './context';
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const CSE_DEPARTMENT = 'dept-cse';
-const MECH_DEPARTMENT = 'dept-mech';
+const DEPT_CSE = 'dept-cse';
+const DEPT_ECE = 'dept-ece';
 
-function auth(overrides: Partial<AuthContext> & { role: UserRole }): AuthContext {
+function context(overrides: Partial<AuthContext>): AuthContext {
   return {
-    userId: 'user-generic',
-    authId: 'auth-generic',
-    email: 'user@smvec.ac.in',
-    name: 'Test User',
+    userId: 'user-1',
+    authId: 'auth-1',
+    email: 'someone@smvec.ac.in',
+    role: 'student',
+    name: 'Someone',
     studentId: null,
-    mentorId: null,
     departmentId: null,
     request: {
       requestId: 'req-1',
@@ -50,256 +54,208 @@ function auth(overrides: Partial<AuthContext> & { role: UserRole }): AuthContext
   };
 }
 
-const studentA = auth({
+const studentA = context({
   role: 'student',
   userId: 'user-student-a',
   studentId: 'student-a',
-  departmentId: CSE_DEPARTMENT,
+  departmentId: DEPT_CSE,
 });
 
-const studentB = auth({
+const studentB = context({
   role: 'student',
   userId: 'user-student-b',
   studentId: 'student-b',
-  departmentId: CSE_DEPARTMENT,
+  departmentId: DEPT_ECE,
 });
 
-const assignedMentor = auth({
-  role: 'mentor',
-  userId: 'user-mentor-1',
-  mentorId: 'mentor-1',
-});
-
-const otherMentor = auth({
-  role: 'mentor',
-  userId: 'user-mentor-2',
-  mentorId: 'mentor-2',
-});
-
-/** Named coordinator on the internship. */
-const coordinatingFaculty = auth({
+const facultyCse = context({
   role: 'faculty',
-  userId: 'user-faculty-1',
-  departmentId: MECH_DEPARTMENT,
+  userId: 'user-faculty-cse',
+  departmentId: DEPT_CSE,
 });
 
-/** Same department as the student, but not the named coordinator. */
-const departmentFaculty = auth({
+const facultyNoDept = context({
   role: 'faculty',
-  userId: 'user-faculty-2',
-  departmentId: CSE_DEPARTMENT,
-});
-
-/** Different department, not the coordinator. */
-const outsideFaculty = auth({
-  role: 'faculty',
-  userId: 'user-faculty-3',
-  departmentId: MECH_DEPARTMENT,
-});
-
-/** Faculty with no department assigned at all. */
-const unscopedFaculty = auth({
-  role: 'faculty',
-  userId: 'user-faculty-4',
+  userId: 'user-faculty-none',
   departmentId: null,
 });
 
-const admin = auth({ role: 'admin', userId: 'user-admin' });
+const admin = context({ role: 'admin', userId: 'user-admin', departmentId: null });
 
-const internship: InternshipScope = {
-  id: 'internship-a',
-  studentId: 'student-a',
-  mentorId: 'mentor-1',
-  facultyCoordinatorId: 'user-faculty-1',
-  student: { departmentId: CSE_DEPARTMENT },
-};
+const recordOfStudentA = { id: 'student-a', departmentId: DEPT_CSE };
+const recordOfStudentB = { id: 'student-b', departmentId: DEPT_ECE };
+const recordNoDept = { id: 'student-c', departmentId: null };
+
+// ---------------------------------------------------------------------------
+// Role predicates
+// ---------------------------------------------------------------------------
+
+describe('role predicates', () => {
+  it('identifies each role', () => {
+    expect(isStudent(studentA)).toBe(true);
+    expect(isFaculty(facultyCse)).toBe(true);
+    expect(isAdmin(admin)).toBe(true);
+  });
+
+  it('treats faculty and admin as reviewers, and students as not', () => {
+    expect(isReviewer(facultyCse)).toBe(true);
+    expect(isReviewer(admin)).toBe(true);
+    expect(isReviewer(studentA)).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // resolveRelation
 // ---------------------------------------------------------------------------
 
 describe('resolveRelation', () => {
-  it('identifies the owning student', () => {
-    expect(resolveRelation(studentA, internship)).toBe('owner');
+  it('makes a student the owner of their own record', () => {
+    expect(resolveRelation(studentA, recordOfStudentA)).toBe('owner');
   });
 
-  it('gives another student no relation', () => {
-    expect(resolveRelation(studentB, internship)).toBe('none');
+  it('gives a student nothing on another student’s record', () => {
+    expect(resolveRelation(studentA, recordOfStudentB)).toBe('none');
   });
 
-  it('identifies the assigned mentor', () => {
-    expect(resolveRelation(assignedMentor, internship)).toBe('assigned_mentor');
+  it('scopes faculty to their own department', () => {
+    expect(resolveRelation(facultyCse, recordOfStudentA)).toBe('scoped_faculty');
+    expect(resolveRelation(facultyCse, recordOfStudentB)).toBe('none');
   });
 
-  it('gives an unassigned mentor no relation', () => {
-    expect(resolveRelation(otherMentor, internship)).toBe('none');
+  it('gives faculty with no department nothing, rather than everything', () => {
+    // Fail-closed: an unconfigured staff account must be useless, not omnipotent.
+    expect(resolveRelation(facultyNoDept, recordOfStudentA)).toBe('none');
   });
 
-  it('scopes faculty in by coordinator assignment', () => {
-    expect(resolveRelation(coordinatingFaculty, internship)).toBe('scoped_faculty');
+  it('gives faculty nothing on a student with no department', () => {
+    // Two nulls must not be treated as a match.
+    expect(resolveRelation(facultyCse, recordNoDept)).toBe('none');
   });
 
-  it('scopes faculty in by department match', () => {
-    expect(resolveRelation(departmentFaculty, internship)).toBe('scoped_faculty');
-  });
-
-  it('keeps faculty from another department out', () => {
-    expect(resolveRelation(outsideFaculty, internship)).toBe('none');
-  });
-
-  it('fails closed for faculty with no department and no assignment', () => {
-    expect(resolveRelation(unscopedFaculty, internship)).toBe('none');
-  });
-
-  it('treats admin as unrestricted', () => {
-    expect(resolveRelation(admin, internship)).toBe('admin');
-  });
-
-  it('does not match a null department against a null student department', () => {
-    // Both null must not be treated as "same department", or every unassigned
-    // faculty member would see every unassigned student.
-    const orphanInternship: InternshipScope = {
-      ...internship,
-      facultyCoordinatorId: null,
-      student: { departmentId: null },
-    };
-    expect(resolveRelation(unscopedFaculty, orphanInternship)).toBe('none');
-  });
-
-  it('does not treat a student with a null studentId as an owner', () => {
-    const brokenStudent = auth({ role: 'student', studentId: null });
-    const orphanInternship: InternshipScope = { ...internship, studentId: null as never };
-    expect(resolveRelation(brokenStudent, orphanInternship)).toBe('none');
-  });
-
-  it('does not treat a mentor with a null mentorId as assigned', () => {
-    const brokenMentor = auth({ role: 'mentor', mentorId: null });
-    const unassigned: InternshipScope = { ...internship, mentorId: null };
-    expect(resolveRelation(brokenMentor, unassigned)).toBe('none');
+  it('makes admin admin everywhere, including records with no department', () => {
+    expect(resolveRelation(admin, recordOfStudentA)).toBe('admin');
+    expect(resolveRelation(admin, recordOfStudentB)).toBe('admin');
+    expect(resolveRelation(admin, recordNoDept)).toBe('admin');
   });
 });
 
 // ---------------------------------------------------------------------------
-// canAccess — the matrix itself
+// canAccess — submissions
 // ---------------------------------------------------------------------------
 
-describe('canAccess', () => {
+describe('canAccess: submission', () => {
+  it('lets the owner read and write their own submission', () => {
+    expect(canAccess('owner', 'submission', 'read')).toBe(true);
+    expect(canAccess('owner', 'submission', 'write')).toBe(true);
+  });
+
+  it('does not let the owner review their own submission', () => {
+    // Self-approval would make the whole review step meaningless.
+    expect(canAccess('owner', 'submission', 'review')).toBe(false);
+  });
+
+  it('lets scoped faculty read and review but never write', () => {
+    expect(canAccess('scoped_faculty', 'submission', 'read')).toBe(true);
+    expect(canAccess('scoped_faculty', 'submission', 'review')).toBe(true);
+    // An answer edited by a reviewer is no longer evidence of anything.
+    expect(canAccess('scoped_faculty', 'submission', 'write')).toBe(false);
+  });
+
+  it('does not let even an admin rewrite a student’s answers', () => {
+    expect(canAccess('admin', 'submission', 'write')).toBe(false);
+  });
+
+  it('lets admin review and delete', () => {
+    expect(canAccess('admin', 'submission', 'review')).toBe(true);
+    expect(canAccess('admin', 'submission', 'delete')).toBe(true);
+  });
+
+  it('denies deletion to faculty and students', () => {
+    expect(canAccess('scoped_faculty', 'submission', 'delete')).toBe(false);
+    expect(canAccess('owner', 'submission', 'delete')).toBe(false);
+  });
+
   it('denies everything to an unrelated caller', () => {
-    const resources: ResourceKind[] = [
-      'internship',
-      'attendance',
-      'work_log',
-      'weekly_report',
-      'final_assessment',
-      'mentor_evaluation',
-      'document',
-    ];
-    for (const resource of resources) {
-      expect(canAccess('none', resource, 'read')).toBe(false);
-      expect(canAccess('none', resource, 'write')).toBe(false);
+    const levels: AccessLevel[] = ['read', 'write', 'review', 'delete'];
+    for (const level of levels) {
+      expect(canAccess('none', 'submission', level)).toBe(false);
     }
   });
+});
 
-  it('lets the owner read and write their daily records', () => {
-    expect(canAccess('owner', 'attendance', 'read')).toBe(true);
-    expect(canAccess('owner', 'attendance', 'write')).toBe(true);
-    expect(canAccess('owner', 'work_log', 'read')).toBe(true);
-    expect(canAccess('owner', 'work_log', 'write')).toBe(true);
-    expect(canAccess('owner', 'weekly_report', 'write')).toBe(true);
+// ---------------------------------------------------------------------------
+// canAccess — questions
+// ---------------------------------------------------------------------------
+
+describe('canAccess: question', () => {
+  it('lets a student read questions so the form can render', () => {
+    expect(canAccess('owner', 'question', 'read')).toBe(true);
   });
 
-  it('does not let a student verify their own attendance', () => {
-    // "R/Verify assigned" belongs to the mentor; the student column is plain RW.
-    expect(canAccess('owner', 'attendance', 'verify')).toBe(false);
+  it('does not let a student write questions', () => {
+    expect(canAccess('owner', 'question', 'write')).toBe(false);
   });
 
-  it('lets the assigned mentor read but not write attendance', () => {
-    expect(canAccess('assigned_mentor', 'attendance', 'read')).toBe(true);
-    expect(canAccess('assigned_mentor', 'attendance', 'write')).toBe(false);
-    expect(canAccess('assigned_mentor', 'attendance', 'verify')).toBe(true);
+  it('lets reviewers write questions', () => {
+    expect(canAccess('scoped_faculty', 'question', 'write')).toBe(true);
+    expect(canAccess('admin', 'question', 'write')).toBe(true);
   });
 
-  it('lets the assigned mentor read work logs but never edit them', () => {
-    expect(canAccess('assigned_mentor', 'work_log', 'read')).toBe(true);
-    expect(canAccess('assigned_mentor', 'work_log', 'write')).toBe(false);
+  it('restricts deletion to admin', () => {
+    expect(canAccess('admin', 'question', 'delete')).toBe(true);
+    expect(canAccess('scoped_faculty', 'question', 'delete')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// canAccess — students and documents
+// ---------------------------------------------------------------------------
+
+describe('canAccess: student', () => {
+  it('lets a student read and update their own profile', () => {
+    expect(canAccess('owner', 'student', 'read')).toBe(true);
+    expect(canAccess('owner', 'student', 'write')).toBe(true);
   });
 
-  it('gives the mentor no access at all to the final assessment', () => {
-    // 05_API_Spec marks this cell "—" for mentors.
-    expect(canAccess('assigned_mentor', 'final_assessment', 'read')).toBe(false);
-    expect(canAccess('assigned_mentor', 'final_assessment', 'write')).toBe(false);
-    expect(canAccess('assigned_mentor', 'final_assessment', 'unlock')).toBe(false);
+  it('lets scoped faculty read but not edit a student profile', () => {
+    expect(canAccess('scoped_faculty', 'student', 'read')).toBe(true);
+    expect(canAccess('scoped_faculty', 'student', 'write')).toBe(false);
   });
+});
 
-  it('does not let a mentor approve an internship', () => {
-    expect(canAccess('assigned_mentor', 'internship', 'approve')).toBe(false);
-  });
-
-  it('lets only the mentor and admin author a mentor evaluation', () => {
-    expect(canAccess('assigned_mentor', 'mentor_evaluation', 'write')).toBe(true);
-    expect(canAccess('admin', 'mentor_evaluation', 'write')).toBe(true);
-    // Faculty may read but not author — "R scoped" in the matrix.
-    expect(canAccess('scoped_faculty', 'mentor_evaluation', 'read')).toBe(true);
-    expect(canAccess('scoped_faculty', 'mentor_evaluation', 'write')).toBe(false);
-    // The student sees their own ratings but cannot change them.
-    expect(canAccess('owner', 'mentor_evaluation', 'read')).toBe(true);
-    expect(canAccess('owner', 'mentor_evaluation', 'write')).toBe(false);
-  });
-
-  it('lets faculty unlock but not author a final assessment', () => {
-    expect(canAccess('scoped_faculty', 'final_assessment', 'read')).toBe(true);
-    expect(canAccess('scoped_faculty', 'final_assessment', 'unlock')).toBe(true);
-    expect(canAccess('scoped_faculty', 'final_assessment', 'write')).toBe(false);
-  });
-
-  it('does not let a student unlock their own final assessment', () => {
-    expect(canAccess('owner', 'final_assessment', 'unlock')).toBe(false);
-  });
-
-  it('lets faculty approve internships', () => {
-    expect(canAccess('scoped_faculty', 'internship', 'approve')).toBe(true);
-    expect(canAccess('admin', 'internship', 'approve')).toBe(true);
-    expect(canAccess('owner', 'internship', 'approve')).toBe(false);
-  });
-
-  it('does not let a document owner verify their own document', () => {
+describe('canAccess: document', () => {
+  it('lets the owner read, attach and remove their own file', () => {
+    expect(canAccess('owner', 'document', 'read')).toBe(true);
     expect(canAccess('owner', 'document', 'write')).toBe(true);
-    expect(canAccess('owner', 'document', 'verify')).toBe(false);
-    expect(canAccess('scoped_faculty', 'document', 'verify')).toBe(true);
+    expect(canAccess('owner', 'document', 'delete')).toBe(true);
   });
 
-  it('grants admin every defined level on every resource', () => {
-    const cases: [ResourceKind, Parameters<typeof canAccess>[2]][] = [
-      ['internship', 'read'],
-      ['internship', 'write'],
-      ['internship', 'approve'],
-      ['attendance', 'read'],
-      ['attendance', 'write'],
-      ['attendance', 'verify'],
-      ['work_log', 'read'],
-      ['work_log', 'write'],
-      ['weekly_report', 'read'],
-      ['weekly_report', 'write'],
-      ['final_assessment', 'read'],
-      ['final_assessment', 'write'],
-      ['final_assessment', 'unlock'],
-      ['mentor_evaluation', 'read'],
-      ['mentor_evaluation', 'write'],
-      ['document', 'read'],
-      ['document', 'write'],
-      ['document', 'verify'],
-    ];
-    for (const [resource, level] of cases) {
-      expect(canAccess('admin', resource, level), `admin ${resource}.${level}`).toBe(true);
+  it('lets scoped faculty read a file but not upload or delete one', () => {
+    expect(canAccess('scoped_faculty', 'document', 'read')).toBe(true);
+    expect(canAccess('scoped_faculty', 'document', 'write')).toBe(false);
+    expect(canAccess('scoped_faculty', 'document', 'delete')).toBe(false);
+  });
+});
+
+describe('canAccess: exhaustive fail-closed check', () => {
+  it('denies every action to relation "none" across every resource', () => {
+    const resources: ResourceKind[] = ['submission', 'question', 'student', 'document'];
+    const levels: AccessLevel[] = ['read', 'write', 'review', 'delete'];
+
+    for (const resource of resources) {
+      for (const level of levels) {
+        expect(canAccess('none', resource, level)).toBe(false);
+      }
     }
   });
 
-  it('returns false for a level that is not defined on a resource', () => {
-    // `approve` only exists on internship; asking elsewhere must not accidentally allow.
-    const relations: Relation[] = ['owner', 'assigned_mentor', 'scoped_faculty', 'admin'];
+  it('never silently allows an undefined action', () => {
+    // `review` is meaningless for a question; absence must read as denial.
+    const relations: Relation[] = ['owner', 'scoped_faculty', 'admin'];
     for (const relation of relations) {
-      expect(canAccess(relation, 'attendance', 'approve')).toBe(false);
-      expect(canAccess(relation, 'work_log', 'verify')).toBe(false);
+      expect(canAccess(relation, 'question', 'review')).toBe(false);
+      expect(canAccess(relation, 'student', 'review')).toBe(false);
+      expect(canAccess(relation, 'document', 'review')).toBe(false);
     }
   });
 });
@@ -308,74 +264,71 @@ describe('canAccess', () => {
 // Scope filters
 // ---------------------------------------------------------------------------
 
-describe('internshipScopeFilter', () => {
-  it('is unrestricted for admin', () => {
-    expect(internshipScopeFilter(admin)).toEqual({});
-  });
-
-  it('restricts a student to their own id', () => {
-    expect(internshipScopeFilter(studentA)).toEqual({ studentId: 'student-a' });
-  });
-
-  it('restricts a mentor to their own assignments', () => {
-    expect(internshipScopeFilter(assignedMentor)).toEqual({ mentorId: 'mentor-1' });
-  });
-
-  it('gives faculty coordinator plus department clauses', () => {
-    expect(internshipScopeFilter(departmentFaculty)).toEqual({
-      OR: [
-        { facultyCoordinatorId: 'user-faculty-2' },
-        { student: { departmentId: CSE_DEPARTMENT } },
-      ],
-    });
-  });
-
-  it('omits the department clause when faculty has no department', () => {
-    expect(internshipScopeFilter(unscopedFaculty)).toEqual({
-      OR: [{ facultyCoordinatorId: 'user-faculty-4' }],
-    });
-  });
-
-  it('produces an unmatchable filter for a student with no profile', () => {
-    // Fails closed: a sentinel id rather than an empty filter, which would expose
-    // every internship.
-    const broken = auth({ role: 'student', studentId: null });
-    expect(internshipScopeFilter(broken)).toEqual({ studentId: '__none__' });
-  });
-
-  it('produces an unmatchable filter for a mentor with no profile', () => {
-    const broken = auth({ role: 'mentor', mentorId: null });
-    expect(internshipScopeFilter(broken)).toEqual({ mentorId: '__none__' });
-  });
-});
-
 describe('studentScopeFilter', () => {
-  it('is unrestricted for admin', () => {
+  it('gives admin an unrestricted filter', () => {
     expect(studentScopeFilter(admin)).toEqual({});
   });
 
-  it('restricts a student to themselves', () => {
+  it('pins a student to their own record', () => {
     expect(studentScopeFilter(studentA)).toEqual({ id: 'student-a' });
   });
 
-  it('restricts a mentor to students they supervise', () => {
-    expect(studentScopeFilter(assignedMentor)).toEqual({
-      internships: { some: { mentorId: 'mentor-1' } },
+  it('scopes faculty to their department', () => {
+    expect(studentScopeFilter(facultyCse)).toEqual({ departmentId: DEPT_CSE });
+  });
+
+  it('gives faculty with no department an impossible filter', () => {
+    expect(studentScopeFilter(facultyNoDept)).toEqual({ departmentId: '__none__' });
+  });
+
+  it('gives a student with no studentId an impossible filter', () => {
+    const broken = context({ role: 'student', studentId: null });
+    expect(studentScopeFilter(broken)).toEqual({ id: '__none__' });
+  });
+});
+
+describe('submissionScopeFilter', () => {
+  it('gives admin an unrestricted filter', () => {
+    expect(submissionScopeFilter(admin)).toEqual({});
+  });
+
+  it('pins a student to their own submissions', () => {
+    expect(submissionScopeFilter(studentA)).toEqual({ studentId: 'student-a' });
+  });
+
+  it('scopes faculty through the student’s department', () => {
+    expect(submissionScopeFilter(facultyCse)).toEqual({
+      student: { departmentId: DEPT_CSE },
     });
   });
 
-  it('scopes faculty by coordination or department', () => {
-    expect(studentScopeFilter(departmentFaculty)).toEqual({
-      OR: [
-        { internships: { some: { facultyCoordinatorId: 'user-faculty-2' } } },
-        { departmentId: CSE_DEPARTMENT },
-      ],
+  it('gives faculty with no department an impossible filter', () => {
+    expect(submissionScopeFilter(facultyNoDept)).toEqual({
+      student: { departmentId: '__none__' },
     });
+  });
+});
+
+describe('questionScopeFilter', () => {
+  it('gives admin every question', () => {
+    expect(questionScopeFilter(admin)).toEqual({});
+  });
+
+  it('gives a student global questions plus their department’s', () => {
+    expect(questionScopeFilter(studentA)).toEqual({
+      OR: [{ departmentId: null }, { departmentId: DEPT_CSE }],
+    });
+  });
+
+  it('gives a caller with no department only the global questions', () => {
+    // Still usable, unlike the student/submission filters: a global question set
+    // is the sensible default rather than an empty form.
+    expect(questionScopeFilter(facultyNoDept)).toEqual({ OR: [{ departmentId: null }] });
   });
 });
 
 // ---------------------------------------------------------------------------
-// Contact detail redaction — 07_Security_and_Privacy §8
+// Contact detail redaction
 // ---------------------------------------------------------------------------
 
 describe('canSeeContactDetails', () => {
@@ -383,21 +336,39 @@ describe('canSeeContactDetails', () => {
     expect(canSeeContactDetails(studentA, 'student-a')).toBe(true);
   });
 
-  it('does not let a student see another student\u2019s details', () => {
+  it('does not let a student see another student’s', () => {
     expect(canSeeContactDetails(studentA, 'student-b')).toBe(false);
   });
 
-  it('hides the mobile number from faculty', () => {
-    // "Faculty sees student name/register number — not mobile number unless needed."
-    expect(canSeeContactDetails(departmentFaculty, 'student-a')).toBe(false);
-    expect(canSeeContactDetails(coordinatingFaculty, 'student-a')).toBe(false);
+  it('withholds them from faculty, who do not need them to review', () => {
+    expect(canSeeContactDetails(facultyCse, 'student-a')).toBe(false);
   });
 
-  it('hides the mobile number from mentors', () => {
-    expect(canSeeContactDetails(assignedMentor, 'student-a')).toBe(false);
-  });
-
-  it('allows admin', () => {
+  it('lets admin see them', () => {
     expect(canSeeContactDetails(admin, 'student-a')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-tenant regression
+// ---------------------------------------------------------------------------
+
+describe('cross-boundary access is denied end to end', () => {
+  it('blocks a student from another student’s submission at the relation step', () => {
+    const relation = resolveRelation(studentB, recordOfStudentA);
+    expect(relation).toBe('none');
+    expect(canAccess(relation, 'submission', 'read')).toBe(false);
+  });
+
+  it('blocks faculty from another department’s submission', () => {
+    const relation = resolveRelation(facultyCse, recordOfStudentB);
+    expect(relation).toBe('none');
+    expect(canAccess(relation, 'submission', 'review')).toBe(false);
+  });
+
+  it('allows the intended path: faculty reviewing their own department', () => {
+    const relation = resolveRelation(facultyCse, recordOfStudentA);
+    expect(relation).toBe('scoped_faculty');
+    expect(canAccess(relation, 'submission', 'review')).toBe(true);
   });
 });

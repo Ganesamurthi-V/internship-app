@@ -17,9 +17,6 @@
       "bundleIdentifier": "edu.smvec.internship",
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Used to scan and upload internship documents.",
-        "NSPhotoLibraryUsageDescription": "Used to upload internship documents from your gallery.",
-        "NSFaceIDUsageDescription": "Used to secure app access with Face ID.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -31,38 +28,11 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png",
         "backgroundColor": "#1e3a5f"
       },
-      "permissions": [
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE",
-        "RECEIVE_BOOT_COMPLETED",
-        "USE_BIOMETRIC",
-        "USE_FINGERPRINT"
-      ],
+      "permissions": [],
       "edgeToEdgeEnabled": true
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store",
-      "expo-sqlite",
-      [
-        "expo-local-authentication",
-        {
-          "faceIDPermission": "Used to secure your app access."
-        }
-      ],
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "Used to scan internship documents."
-        }
-      ],
-      [
-        "expo-image-picker",
-        {
-          "photosPermission": "Used to upload internship documents from your gallery."
-        }
-      ],
       [
         "expo-build-properties",
         {

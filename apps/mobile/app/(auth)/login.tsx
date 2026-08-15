@@ -60,8 +60,6 @@ function routeForRole(role: UserRole): string {
     case 'faculty':
     case 'admin':
       return '/(faculty)/dashboard';
-    case 'mentor':
-      return '/(mentor)/dashboard';
     default:
       return '/(student)/dashboard';
   }
@@ -201,7 +199,6 @@ export default function LoginScreen() {
             {[
               ['Student', 'praveen@smvec.ac.in'],
               ['Faculty', 'faculty@smvec.ac.in'],
-              ['Mentor', 'raj@iinvsys.example'],
               ['Admin', 'admin@smvec.ac.in'],
             ].map(([label, address]) => (
               <Pressable

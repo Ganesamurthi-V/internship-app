@@ -1,324 +1,589 @@
 /**
- * Unit tests for the business-logic calculations listed in 09_Test_Plan §1.
+ * Tests for the shared pure functions and the answer validator.
+ *
+ * These exist because the same code runs on the device and on the server: if
+ * `summariseSubmissions` disagreed between the two, a student would see a
+ * different approval percentage than the faculty reviewing them.
+ *
+ * The cases are chosen around boundaries and the things that actually go wrong
+ * (timezone rollover, invalid calendar dates, duplicate rows) rather than
+ * restating the happy path in five ways.
  */
 
 import { describe, expect, it } from 'vitest';
 import {
   addDays,
-  calculateAttendancePercentage,
-  calculateInternshipDuration,
-  calculateTotalHours,
-  calculateWeekNumber,
-  calculateWeekRange,
-  countInternshipWeeks,
   countWords,
-  countWorkingDays,
   dayOfWeek,
   daysBetween,
   enumerateDates,
+  findMissingRequiredAnswers,
+  findUnknownAnswers,
   formatDateOnly,
   isDateOnly,
-  isFinalAssessmentUnlocked,
-  isTimeOnly,
+  isSubmissionDateAllowed,
+  isWeekend,
   isWithinRange,
+  parseDateOnly,
   sanitizeText,
-  tallyStatuses,
-  timeToMinutes,
+  submissionLockReason,
+  summariseSubmissions,
+  emptyAttendanceSummary,
 } from './calculations';
+import { answerValidatorFor } from './question';
+import { validateAnswersAgainstQuestions, type QuestionRule } from './submission';
+import { reviewSubmissionSchema } from './submission';
+import { submitAnswersSchema } from './submission';
+import { createQuestionSchema } from './question';
+
+// ---------------------------------------------------------------------------
+// Text
+// ---------------------------------------------------------------------------
 
 describe('countWords', () => {
-  it('counts whitespace-separated tokens', () => {
-    expect(countWords('one two three')).toBe(3);
+  it('counts words separated by any whitespace run', () => {
+    expect(countWords('one two   three\nfour\tfive')).toBe(5);
   });
 
-  it('treats runs of whitespace and newlines as one separator', () => {
-    expect(countWords('one   two\n\nthree\tfour')).toBe(4);
-  });
-
-  it('returns 0 for empty, blank, null and undefined', () => {
-    expect(countWords('')).toBe(0);
-    expect(countWords('    \n ')).toBe(0);
+  it('treats null, undefined and blank as zero', () => {
     expect(countWords(null)).toBe(0);
     expect(countWords(undefined)).toBe(0);
-  });
-
-  it('ignores leading and trailing whitespace', () => {
-    expect(countWords('  hello world  ')).toBe(2);
-  });
-
-  it('counts a 200-word string as exactly 200', () => {
-    const text = Array.from({ length: 200 }, (_, i) => `w${i}`).join(' ');
-    expect(countWords(text)).toBe(200);
+    expect(countWords('   \n\t ')).toBe(0);
   });
 });
 
 describe('sanitizeText', () => {
-  it('strips control characters but keeps newlines and tabs', () => {
-    expect(sanitizeText('a\u0000b\u0007c')).toBe('abc');
-    expect(sanitizeText('line1\nline2\tend')).toBe('line1\nline2\tend');
+  it('strips control characters that would otherwise pass a length check', () => {
+    // A string of control chars has length > 0 but no content. If sanitising ran
+    // after validation, this would satisfy min(1) and store as empty.
+    expect(sanitizeText('\u0000\u0001\u0002')).toBe('');
   });
 
-  it('trims surrounding whitespace', () => {
-    expect(sanitizeText('  padded  ')).toBe('padded');
+  it('keeps newlines and tabs but collapses excessive blank lines', () => {
+    expect(sanitizeText('a\n\n\n\nb')).toBe('a\n\nb');
+  });
+
+  it('normalises CRLF to LF', () => {
+    expect(sanitizeText('a\r\nb')).toBe('a\nb');
+  });
+
+  it('collapses runs of spaces and trims the ends', () => {
+    expect(sanitizeText('  a    b  ')).toBe('a b');
   });
 });
 
-describe('date primitives', () => {
-  it('accepts valid ISO dates and rejects impossible ones', () => {
-    expect(isDateOnly('2026-08-14')).toBe(true);
-    expect(isDateOnly('2026-02-30')).toBe(false);
-    expect(isDateOnly('2026-13-01')).toBe(false);
-    expect(isDateOnly('14-08-2026')).toBe(false);
-    expect(isDateOnly('2026-8-4')).toBe(false);
+// ---------------------------------------------------------------------------
+// Dates
+// ---------------------------------------------------------------------------
+
+describe('isDateOnly', () => {
+  it('accepts a real date', () => {
+    expect(isDateOnly('2026-08-17')).toBe(true);
   });
 
-  it('accepts leap days in leap years only', () => {
+  it('rejects a date that Date would silently roll forward', () => {
+    // new Date('2026-02-30') becomes March 2nd. Only the round-trip check catches it.
+    expect(isDateOnly('2026-02-30')).toBe(false);
+    expect(isDateOnly('2026-13-01')).toBe(false);
+  });
+
+  it('accepts a real leap day and rejects a fake one', () => {
     expect(isDateOnly('2024-02-29')).toBe(true);
     expect(isDateOnly('2026-02-29')).toBe(false);
   });
 
-  it('validates HH:MM times', () => {
-    expect(isTimeOnly('09:00')).toBe(true);
-    expect(isTimeOnly('23:59')).toBe(true);
-    expect(isTimeOnly('24:00')).toBe(false);
-    expect(isTimeOnly('9:00')).toBe(false);
-    expect(isTimeOnly('09:60')).toBe(false);
+  it('rejects wrong formats', () => {
+    expect(isDateOnly('17-08-2026')).toBe(false);
+    expect(isDateOnly('2026-8-1')).toBe(false);
+    expect(isDateOnly('')).toBe(false);
+  });
+});
+
+describe('date arithmetic', () => {
+  it('parses and formats as UTC so the device timezone cannot shift the day', () => {
+    expect(formatDateOnly(parseDateOnly('2026-08-17'))).toBe('2026-08-17');
   });
 
-  it('round-trips through parse and format', () => {
-    expect(formatDateOnly(new Date(Date.UTC(2026, 7, 14)))).toBe('2026-08-14');
-  });
-
-  it('adds days across month and year boundaries', () => {
-    expect(addDays('2026-08-14', 1)).toBe('2026-08-15');
+  it('crosses month and year boundaries', () => {
     expect(addDays('2026-08-31', 1)).toBe('2026-09-01');
     expect(addDays('2026-12-31', 1)).toBe('2027-01-01');
-    expect(addDays('2026-08-01', -1)).toBe('2026-07-31');
+    expect(addDays('2026-01-01', -1)).toBe('2025-12-31');
   });
 
-  it('measures days between dates, signed', () => {
-    expect(daysBetween('2026-08-14', '2026-08-14')).toBe(0);
-    expect(daysBetween('2026-06-01', '2026-07-31')).toBe(60);
-    expect(daysBetween('2026-07-31', '2026-06-01')).toBe(-60);
+  it('measures signed day distance', () => {
+    expect(daysBetween('2026-08-17', '2026-08-20')).toBe(3);
+    expect(daysBetween('2026-08-20', '2026-08-17')).toBe(-3);
+    expect(daysBetween('2026-08-17', '2026-08-17')).toBe(0);
   });
 
-  it('is immune to DST shifts by working in UTC', () => {
-    // Spans the European DST change; a local-time implementation would return 30.
-    expect(daysBetween('2026-03-15', '2026-04-15')).toBe(31);
+  it('is inclusive at both ends of a range', () => {
+    expect(isWithinRange('2026-08-17', '2026-08-17', '2026-08-20')).toBe(true);
+    expect(isWithinRange('2026-08-20', '2026-08-17', '2026-08-20')).toBe(true);
+    expect(isWithinRange('2026-08-21', '2026-08-17', '2026-08-20')).toBe(false);
   });
 
-  it('checks inclusive range membership', () => {
-    expect(isWithinRange('2026-06-01', '2026-06-01', '2026-07-31')).toBe(true);
-    expect(isWithinRange('2026-07-31', '2026-06-01', '2026-07-31')).toBe(true);
-    expect(isWithinRange('2026-05-31', '2026-06-01', '2026-07-31')).toBe(false);
-    expect(isWithinRange('2026-08-01', '2026-06-01', '2026-07-31')).toBe(false);
+  it('reports the weekday with Sunday as zero', () => {
+    // 2026-08-16 is a Sunday.
+    expect(dayOfWeek('2026-08-16')).toBe(0);
+    expect(isWeekend('2026-08-16')).toBe(true);
+    expect(isWeekend('2026-08-15')).toBe(true); // Saturday
+    expect(isWeekend('2026-08-17')).toBe(false); // Monday
   });
 
-  it('reports day of week with Sunday as 0', () => {
-    expect(dayOfWeek('2026-08-16')).toBe(0); // Sunday
-    expect(dayOfWeek('2026-08-14')).toBe(5); // Friday
-  });
-
-  it('enumerates an inclusive date range', () => {
-    expect(enumerateDates('2026-08-14', '2026-08-16')).toEqual([
-      '2026-08-14',
-      '2026-08-15',
-      '2026-08-16',
+  it('enumerates inclusive ranges and returns empty when reversed', () => {
+    expect(enumerateDates('2026-08-17', '2026-08-19')).toEqual([
+      '2026-08-17',
+      '2026-08-18',
+      '2026-08-19',
     ]);
-    expect(enumerateDates('2026-08-14', '2026-08-14')).toEqual(['2026-08-14']);
-    expect(enumerateDates('2026-08-16', '2026-08-14')).toEqual([]);
+    expect(enumerateDates('2026-08-17', '2026-08-17')).toEqual(['2026-08-17']);
+    expect(enumerateDates('2026-08-19', '2026-08-17')).toEqual([]);
   });
 });
 
-describe('calculateInternshipDuration', () => {
-  it('counts calendar days inclusively', () => {
-    // 1 June to 31 July 2026 = 61 calendar days.
-    const duration = calculateInternshipDuration('2026-06-01', '2026-07-31');
-    expect(duration.calendarDays).toBe(61);
-  });
+// ---------------------------------------------------------------------------
+// Submission window
+// ---------------------------------------------------------------------------
 
-  it('excludes weekends from working days', () => {
-    // Mon 2026-08-10 to Sun 2026-08-16: 7 calendar days, 5 working days.
-    const duration = calculateInternshipDuration('2026-08-10', '2026-08-16');
-    expect(duration.calendarDays).toBe(7);
-    expect(duration.workingDays).toBe(5);
-    expect(duration.totalWeeks).toBe(1);
-  });
-
-  it('treats a single day as one calendar day', () => {
-    const duration = calculateInternshipDuration('2026-08-14', '2026-08-14');
-    expect(duration.calendarDays).toBe(1);
-    expect(duration.workingDays).toBe(1);
-  });
-
-  it('returns zeros when the end precedes the start', () => {
-    expect(calculateInternshipDuration('2026-08-14', '2026-08-01')).toEqual({
-      calendarDays: 0,
-      workingDays: 0,
-      totalWeeks: 0,
-    });
-  });
-});
-
-describe('calculateTotalHours', () => {
-  it('computes fractional hours from HH:MM times', () => {
-    expect(calculateTotalHours('09:00', '17:30')).toBe(8.5);
-    expect(calculateTotalHours('09:00', '17:00')).toBe(8);
-  });
-
-  it('rounds to two decimals to match NUMERIC(5,2)', () => {
-    expect(calculateTotalHours('09:00', '09:20')).toBe(0.33);
-    expect(calculateTotalHours('09:00', '09:10')).toBe(0.17);
-  });
-
-  it('returns null when either time is missing', () => {
-    expect(calculateTotalHours(null, '17:30')).toBeNull();
-    expect(calculateTotalHours('09:00', null)).toBeNull();
-    expect(calculateTotalHours(undefined, undefined)).toBeNull();
-  });
-
-  it('returns null when leaving is not after reporting', () => {
-    expect(calculateTotalHours('17:30', '09:00')).toBeNull();
-    expect(calculateTotalHours('09:00', '09:00')).toBeNull();
-  });
-
-  it('converts times to minutes since midnight', () => {
-    expect(timeToMinutes('00:00')).toBe(0);
-    expect(timeToMinutes('09:30')).toBe(570);
-    expect(timeToMinutes('23:59')).toBe(1439);
-  });
-});
-
-describe('attendance percentage', () => {
-  it('excludes holidays and weekly offs from the denominator', () => {
-    const counts = tallyStatuses([
-      'present',
-      'present',
-      'present',
-      'absent',
-      'holiday',
-      'weekly_off',
-    ]);
-    // Working days = 3 present + 1 absent = 4. 3/4 = 75%.
-    expect(countWorkingDays(counts)).toBe(4);
-    expect(calculateAttendancePercentage(counts)).toBe(75);
-  });
-
-  it('counts permission leave as a working day that was not attended', () => {
-    const counts = tallyStatuses(['present', 'permission_leave']);
-    expect(countWorkingDays(counts)).toBe(2);
-    expect(calculateAttendancePercentage(counts)).toBe(50);
-  });
-
-  it('matches the worked example in the API spec', () => {
-    // 05_API_Spec: 42 attended of 45 working days => 93.3%.
-    const counts = tallyStatuses([
-      ...Array<'present'>(42).fill('present'),
-      ...Array<'absent'>(1).fill('absent'),
-      ...Array<'permission_leave'>(2).fill('permission_leave'),
-      'holiday',
-    ]);
-    expect(countWorkingDays(counts)).toBe(45);
-    expect(calculateAttendancePercentage(counts)).toBe(93.3);
-  });
-
-  it('returns 0 rather than NaN when nothing is recorded', () => {
-    expect(calculateAttendancePercentage(tallyStatuses([]))).toBe(0);
-  });
-
-  it('returns 0 when only non-working days are recorded', () => {
-    expect(calculateAttendancePercentage(tallyStatuses(['holiday', 'weekly_off']))).toBe(0);
-  });
-
-  it('returns 100 for a perfect record', () => {
-    expect(calculateAttendancePercentage(tallyStatuses(['present', 'present']))).toBe(100);
-  });
-});
-
-describe('week numbering', () => {
-  const start = '2026-06-01';
-
-  it('starts week 1 on the internship start date', () => {
-    expect(calculateWeekNumber(start, '2026-06-01')).toBe(1);
-    expect(calculateWeekNumber(start, '2026-06-07')).toBe(1);
-  });
-
-  it('rolls to week 2 on the eighth day', () => {
-    expect(calculateWeekNumber(start, '2026-06-08')).toBe(2);
-    expect(calculateWeekNumber(start, '2026-06-14')).toBe(2);
-  });
-
-  it('returns null before the internship starts', () => {
-    expect(calculateWeekNumber(start, '2026-05-31')).toBeNull();
-  });
-
-  it('derives the date range for a week', () => {
-    expect(calculateWeekRange(start, '2026-07-31', 1)).toEqual({
-      weekNumber: 1,
-      weekStartDate: '2026-06-01',
-      weekEndDate: '2026-06-07',
-    });
-    expect(calculateWeekRange(start, '2026-07-31', 5)).toEqual({
-      weekNumber: 5,
-      weekStartDate: '2026-06-29',
-      weekEndDate: '2026-07-05',
-    });
-  });
-
-  it('clamps the final week to the internship end date', () => {
-    // Week 9 would run 2026-07-27..2026-08-02 but the internship ends 07-31.
-    expect(calculateWeekRange(start, '2026-07-31', 9)).toEqual({
-      weekNumber: 9,
-      weekStartDate: '2026-07-27',
-      weekEndDate: '2026-07-31',
-    });
-  });
-
-  it('counts total internship weeks', () => {
-    expect(countInternshipWeeks('2026-06-01', '2026-06-07')).toBe(1);
-    expect(countInternshipWeeks('2026-06-01', '2026-06-08')).toBe(2);
-    expect(countInternshipWeeks('2026-06-01', '2026-07-31')).toBe(9);
-    expect(countInternshipWeeks('2026-06-01', '2026-06-01')).toBe(1);
-  });
-
-  it('keeps week range and week number mutually consistent', () => {
-    const end = '2026-07-31';
-    for (let week = 1; week <= countInternshipWeeks(start, end); week += 1) {
-      const range = calculateWeekRange(start, end, week);
-      expect(calculateWeekNumber(start, range.weekStartDate)).toBe(week);
-      expect(calculateWeekNumber(start, range.weekEndDate)).toBe(week);
-    }
-  });
-});
-
-describe('isFinalAssessmentUnlocked', () => {
-  it('stays locked before the end date', () => {
+describe('isSubmissionDateAllowed', () => {
+  it('allows today when backdating is off', () => {
     expect(
-      isFinalAssessmentUnlocked({
-        endDate: '2026-07-31',
-        today: '2026-07-30',
-        facultyUnlocked: false,
-      }),
+      isSubmissionDateAllowed({ date: '2026-08-17', today: '2026-08-17', backdateDays: 0 }),
+    ).toBe(true);
+  });
+
+  it('rejects yesterday when backdating is off', () => {
+    expect(
+      isSubmissionDateAllowed({ date: '2026-08-16', today: '2026-08-17', backdateDays: 0 }),
     ).toBe(false);
   });
 
-  it('unlocks on the end date itself', () => {
+  it('allows within the backdate window and rejects beyond it', () => {
     expect(
-      isFinalAssessmentUnlocked({
-        endDate: '2026-07-31',
-        today: '2026-07-31',
-        facultyUnlocked: false,
-      }),
+      isSubmissionDateAllowed({ date: '2026-08-15', today: '2026-08-17', backdateDays: 2 }),
     ).toBe(true);
+    expect(
+      isSubmissionDateAllowed({ date: '2026-08-14', today: '2026-08-17', backdateDays: 2 }),
+    ).toBe(false);
   });
 
-  it('unlocks early when faculty grants access', () => {
+  it('always rejects the future, regardless of the window', () => {
     expect(
-      isFinalAssessmentUnlocked({
-        endDate: '2026-07-31',
-        today: '2026-06-15',
-        facultyUnlocked: true,
+      isSubmissionDateAllowed({ date: '2026-08-18', today: '2026-08-17', backdateDays: 30 }),
+    ).toBe(false);
+  });
+});
+
+describe('submissionLockReason', () => {
+  const base = { today: '2026-08-17', backdateDays: 0, allowEditWhilePending: true };
+
+  it('returns null when the day is open and nothing is submitted', () => {
+    expect(
+      submissionLockReason({ ...base, date: '2026-08-17', existingStatus: null }),
+    ).toBeNull();
+  });
+
+  it('locks a future date', () => {
+    expect(
+      submissionLockReason({ ...base, date: '2026-08-18', existingStatus: null }),
+    ).toMatch(/future/iu);
+  });
+
+  it('locks a closed past day', () => {
+    expect(
+      submissionLockReason({ ...base, date: '2026-08-16', existingStatus: null }),
+    ).toMatch(/closed/iu);
+  });
+
+  it('locks an approved submission so an approval cannot be edited away', () => {
+    expect(
+      submissionLockReason({ ...base, date: '2026-08-17', existingStatus: 'approved' }),
+    ).toMatch(/approved/iu);
+  });
+
+  it('leaves a declined submission open so the student can fix and resubmit', () => {
+    expect(
+      submissionLockReason({ ...base, date: '2026-08-17', existingStatus: 'declined' }),
+    ).toBeNull();
+  });
+
+  it('honours the pending-edit setting', () => {
+    expect(
+      submissionLockReason({ ...base, date: '2026-08-17', existingStatus: 'pending' }),
+    ).toBeNull();
+
+    expect(
+      submissionLockReason({
+        ...base,
+        date: '2026-08-17',
+        existingStatus: 'pending',
+        allowEditWhilePending: false,
       }),
+    ).toMatch(/awaiting review/iu);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Attendance summary
+// ---------------------------------------------------------------------------
+
+describe('summariseSubmissions', () => {
+  it('returns the zeroed summary for no submissions', () => {
+    expect(summariseSubmissions([])).toEqual(emptyAttendanceSummary());
+  });
+
+  it('counts each status and computes approval over submitted days', () => {
+    const summary = summariseSubmissions([
+      { submissionDate: '2026-08-10', status: 'approved' },
+      { submissionDate: '2026-08-11', status: 'approved' },
+      { submissionDate: '2026-08-12', status: 'approved' },
+      { submissionDate: '2026-08-13', status: 'pending' },
+      { submissionDate: '2026-08-14', status: 'declined' },
+    ]);
+
+    expect(summary.daysApproved).toBe(3);
+    expect(summary.daysPending).toBe(1);
+    expect(summary.daysDeclined).toBe(1);
+    expect(summary.daysSubmitted).toBe(5);
+    expect(summary.approvalPercentage).toBe(60);
+  });
+
+  it('rounds the percentage to one decimal', () => {
+    const summary = summariseSubmissions([
+      { submissionDate: '2026-08-10', status: 'approved' },
+      { submissionDate: '2026-08-11', status: 'approved' },
+      { submissionDate: '2026-08-12', status: 'declined' },
+    ]);
+    // 2/3 = 66.666… -> 66.7
+    expect(summary.approvalPercentage).toBe(66.7);
+  });
+
+  it('reports the first and last dates regardless of input order', () => {
+    const summary = summariseSubmissions([
+      { submissionDate: '2026-08-14', status: 'approved' },
+      { submissionDate: '2026-08-10', status: 'approved' },
+      { submissionDate: '2026-08-12', status: 'approved' },
+    ]);
+    expect(summary.firstSubmissionDate).toBe('2026-08-10');
+    expect(summary.lastSubmissionDate).toBe('2026-08-14');
+  });
+
+  it('collapses a duplicated date to its strongest status instead of double counting', () => {
+    const summary = summariseSubmissions([
+      { submissionDate: '2026-08-10', status: 'declined' },
+      { submissionDate: '2026-08-10', status: 'approved' },
+    ]);
+    expect(summary.daysSubmitted).toBe(1);
+    expect(summary.daysApproved).toBe(1);
+    expect(summary.daysDeclined).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Answer completeness
+// ---------------------------------------------------------------------------
+
+describe('findMissingRequiredAnswers', () => {
+  const questions = [
+    { id: 'q1', required: true },
+    { id: 'q2', required: false },
+    { id: 'q3', required: true },
+  ];
+
+  it('finds required questions with no answer at all', () => {
+    expect(findMissingRequiredAnswers(questions, [{ questionId: 'q1', answerText: 'done' }])).toEqual(
+      ['q3'],
+    );
+  });
+
+  it('treats a whitespace-only answer as missing', () => {
+    expect(
+      findMissingRequiredAnswers(questions, [
+        { questionId: 'q1', answerText: '   ' },
+        { questionId: 'q3', answerText: 'ok' },
+      ]),
+    ).toEqual(['q1']);
+  });
+
+  it('ignores optional questions', () => {
+    expect(
+      findMissingRequiredAnswers(questions, [
+        { questionId: 'q1', answerText: 'a' },
+        { questionId: 'q3', answerText: 'b' },
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe('findUnknownAnswers', () => {
+  it('flags answers for questions that were not offered', () => {
+    expect(
+      findUnknownAnswers([{ id: 'q1' }], [{ questionId: 'q1' }, { questionId: 'ghost' }]),
+    ).toEqual(['ghost']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Answer validators derived from question definitions
+// ---------------------------------------------------------------------------
+
+describe('answerValidatorFor', () => {
+  it('enforces the question’s own minimum length', () => {
+    const validator = answerValidatorFor({
+      type: 'long_text',
+      required: true,
+      options: null,
+      minLength: 20,
+      maxLength: 100,
+    });
+
+    expect(validator.safeParse('too short').success).toBe(false);
+    expect(validator.safeParse('this answer is definitely long enough').success).toBe(true);
+  });
+
+  it('enforces the maximum length', () => {
+    const validator = answerValidatorFor({
+      type: 'text',
+      required: true,
+      options: null,
+      minLength: 1,
+      maxLength: 10,
+    });
+    expect(validator.safeParse('12345678901').success).toBe(false);
+  });
+
+  it('accepts blank for an optional question', () => {
+    const validator = answerValidatorFor({
+      type: 'long_text',
+      required: false,
+      options: null,
+      minLength: 50,
+      maxLength: 100,
+    });
+    expect(validator.safeParse('').success).toBe(true);
+  });
+
+  it('restricts a choice answer to the offered options', () => {
+    const validator = answerValidatorFor({
+      type: 'choice',
+      required: true,
+      options: ['Yes', 'No'],
+      minLength: null,
+      maxLength: null,
+    });
+
+    expect(validator.safeParse('Yes').success).toBe(true);
+    expect(validator.safeParse('Maybe').success).toBe(false);
+  });
+
+  it('accepts numeric strings for a number question and rejects text', () => {
+    const validator = answerValidatorFor({
+      type: 'number',
+      required: true,
+      options: null,
+      minLength: null,
+      maxLength: null,
+    });
+
+    expect(validator.safeParse('7').success).toBe(true);
+    expect(validator.safeParse('7.5').success).toBe(true);
+    expect(validator.safeParse('-3').success).toBe(true);
+    expect(validator.safeParse('seven').success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Whole-submission validation
+// ---------------------------------------------------------------------------
+
+describe('validateAnswersAgainstQuestions', () => {
+  const questions: QuestionRule[] = [
+    {
+      id: 'q1',
+      prompt: 'What did you work on today?',
+      type: 'long_text',
+      required: true,
+      options: null,
+      minLength: 10,
+      maxLength: 500,
+    },
+    {
+      id: 'q2',
+      prompt: 'Any blockers?',
+      type: 'text',
+      required: false,
+      options: null,
+      minLength: null,
+      maxLength: 200,
+    },
+  ];
+
+  it('returns validated answers with the prompt snapshotted', () => {
+    const result = validateAnswersAgainstQuestions(questions, [
+      { questionId: 'q1', answerText: 'Built the submission review screen today.' },
+    ]);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.answers).toHaveLength(1);
+    expect(result.answers[0]?.promptSnapshot).toBe('What did you work on today?');
+  });
+
+  it('reports a missing required answer against its question id', () => {
+    const result = validateAnswersAgainstQuestions(questions, [
+      { questionId: 'q2', answerText: 'none' },
+    ]);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.fields.q1).toMatch(/required/iu);
+  });
+
+  it('rejects an answer to a question that was not offered', () => {
+    const result = validateAnswersAgainstQuestions(questions, [
+      { questionId: 'q1', answerText: 'A perfectly good answer here.' },
+      { questionId: 'ghost', answerText: 'unexpected' },
+    ]);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.fields.ghost).toBeDefined();
+  });
+
+  it('omits an unanswered optional question rather than writing a blank row', () => {
+    const result = validateAnswersAgainstQuestions(questions, [
+      { questionId: 'q1', answerText: 'Worked through the review queue.' },
+      { questionId: 'q2', answerText: '   ' },
+    ]);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.answers.map((a) => a.questionId)).toEqual(['q1']);
+  });
+
+  it('surfaces a per-question length failure', () => {
+    const result = validateAnswersAgainstQuestions(questions, [
+      { questionId: 'q1', answerText: 'short' },
+    ]);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.fields.q1).toMatch(/at least 10/iu);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Request schemas
+// ---------------------------------------------------------------------------
+
+describe('submitAnswersSchema', () => {
+  it('rejects the same question answered twice', () => {
+    const result = submitAnswersSchema.safeParse({
+      answers: [
+        { questionId: '11111111-1111-4111-8111-111111111111', answerText: 'a' },
+        { questionId: '11111111-1111-4111-8111-111111111111', answerText: 'b' },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty answer list', () => {
+    expect(submitAnswersSchema.safeParse({ answers: [] }).success).toBe(false);
+  });
+
+  it('defaults documentIds to an empty array', () => {
+    const result = submitAnswersSchema.safeParse({
+      answers: [{ questionId: '11111111-1111-4111-8111-111111111111', answerText: 'a' }],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.documentIds).toEqual([]);
+  });
+});
+
+describe('reviewSubmissionSchema', () => {
+  it('accepts an approval with no note', () => {
+    expect(reviewSubmissionSchema.safeParse({ decision: 'approved' }).success).toBe(true);
+  });
+
+  it('requires a reason when declining', () => {
+    const result = reviewSubmissionSchema.safeParse({ decision: 'declined' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a decline whose reason is too short to be useful', () => {
+    expect(reviewSubmissionSchema.safeParse({ decision: 'declined', note: 'no' }).success).toBe(
+      false,
+    );
+  });
+
+  it('accepts a decline with a real reason', () => {
+    expect(
+      reviewSubmissionSchema.safeParse({
+        decision: 'declined',
+        note: 'The photo is unreadable, please re-upload.',
+      }).success,
     ).toBe(true);
+  });
+});
+
+describe('createQuestionSchema', () => {
+  it('requires at least two options for a choice question', () => {
+    const result = createQuestionSchema.safeParse({
+      prompt: 'Did you attend?',
+      type: 'choice',
+      options: ['Yes'],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects options on a non-choice question', () => {
+    const result = createQuestionSchema.safeParse({
+      prompt: 'Describe your day',
+      type: 'long_text',
+      options: ['Yes', 'No'],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('de-duplicates choice options case-insensitively, keeping the first spelling', () => {
+    const result = createQuestionSchema.safeParse({
+      prompt: 'Did you attend?',
+      type: 'choice',
+      options: ['Yes', 'yes', 'No'],
+    });
+
+    // Two identical options would render as two identical radio buttons, so the
+    // duplicate is dropped. Two distinct options remain, which is still valid.
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.options).toEqual(['Yes', 'No']);
+  });
+
+  it('rejects a choice question whose options collapse to fewer than two', () => {
+    const result = createQuestionSchema.safeParse({
+      prompt: 'Did you attend?',
+      type: 'choice',
+      options: ['Yes', 'YES', '  yes  '],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a min length greater than the max', () => {
+    const result = createQuestionSchema.safeParse({
+      prompt: 'Describe your day',
+      minLength: 100,
+      maxLength: 50,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('defaults type to long_text and required to true', () => {
+    const result = createQuestionSchema.safeParse({ prompt: 'What did you do today?' });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.type).toBe('long_text');
+    expect(result.data.required).toBe(true);
   });
 });

@@ -1,19 +1,17 @@
 /**
- * Role and ownership enforcement — the authorization matrix in 05_API_Spec and the
- * access control matrix in 07_Security_and_Privacy §2.
+ * Role and ownership enforcement.
  *
- * The matrix is encoded as data (`ACCESS_MATRIX`) rather than scattered through
- * route handlers, so it can be read side by side with the documents and tested
- * exhaustively. 09_Test_Plan §3 lists the cases this must satisfy.
+ * The authorization rules are encoded as data (`ACCESS_MATRIX`) rather than
+ * scattered through route handlers, so they can be read in one place and tested
+ * exhaustively.
  *
  * Two conventions worth stating:
  *
- *   - Everything fails closed. An unrecognised combination denies access; a
- *     faculty member with no department and no coordinator assignment sees
- *     nothing rather than everything.
- *   - A record that exists but is not yours returns 403, not 404. That is what
- *     09_Test_Plan §3 specifies ("Direct object reference bypass ... returns
- *     403"). It does reveal that an id exists, which is the trade the spec makes.
+ *   - Everything fails closed. An unrecognised combination denies access, and a
+ *     faculty member with no department sees nothing rather than everything.
+ *   - A record that exists but is not yours returns 403, not 404. That reveals an
+ *     id exists, which is the trade made deliberately: a student who mistypes a
+ *     URL gets a clear "not yours" instead of a misleading "does not exist".
  */
 
 import type { UserRole } from '@ims/shared-types';
@@ -27,10 +25,14 @@ import type { AuthContext } from './context';
 
 export const isStudent = (auth: AuthContext): boolean => auth.role === 'student';
 export const isFaculty = (auth: AuthContext): boolean => auth.role === 'faculty';
-export const isMentor = (auth: AuthContext): boolean => auth.role === 'mentor';
 export const isAdmin = (auth: AuthContext): boolean => auth.role === 'admin';
-/** Faculty and admin share most staff-facing capabilities. */
-export const isStaff = (auth: AuthContext): boolean => isFaculty(auth) || isAdmin(auth);
+
+/**
+ * Faculty and admin share every capability; only their data scope differs. Any
+ * check that means "can review" or "can manage questions" should use this rather
+ * than listing both roles.
+ */
+export const isReviewer = (auth: AuthContext): boolean => isFaculty(auth) || isAdmin(auth);
 
 export function requireRole(auth: AuthContext, ...allowed: UserRole[]): void {
   if (!allowed.includes(auth.role)) {
@@ -38,11 +40,18 @@ export function requireRole(auth: AuthContext, ...allowed: UserRole[]): void {
   }
 }
 
+/** Asserts the caller is a reviewer. */
+export function requireReviewer(auth: AuthContext): void {
+  if (!isReviewer(auth)) {
+    throw forbidden('Only faculty can do that.');
+  }
+}
+
 /**
  * Returns the caller's own student id, or fails.
  *
- * Used by the `/me` endpoints and by `POST /api/sync`, whose matrix row is
- * "W own" for students and nothing for everyone else.
+ * Every student-scoped endpoint keys off this rather than trusting a studentId in
+ * the request, which is what makes "answer as someone else" impossible.
  */
 export function requireStudentId(auth: AuthContext): string {
   if (!isStudent(auth) || !auth.studentId) {
@@ -51,127 +60,97 @@ export function requireStudentId(auth: AuthContext): string {
   return auth.studentId;
 }
 
-export function requireMentorId(auth: AuthContext): string {
-  if (!isMentor(auth) || !auth.mentorId) {
-    throw forbidden('Only industry mentors can do that.');
-  }
-  return auth.mentorId;
-}
-
 // ---------------------------------------------------------------------------
-// Relation of the caller to a given internship
+// Access matrix
 // ---------------------------------------------------------------------------
 
-export type Relation = 'owner' | 'assigned_mentor' | 'scoped_faculty' | 'admin' | 'none';
+/** How the caller relates to the record in question. */
+export type Relation = 'owner' | 'scoped_faculty' | 'admin' | 'none';
 
-export type ResourceKind =
-  | 'internship'
-  | 'attendance'
-  | 'work_log'
-  | 'weekly_report'
-  | 'final_assessment'
-  | 'mentor_evaluation'
-  | 'document';
+export type ResourceKind = 'submission' | 'question' | 'student' | 'document';
 
 /**
- * Actions beyond plain read/write that the matrix treats separately:
- *   `verify`  — mentor's soft confirmation of attendance, and document verification
- *   `unlock`  — faculty reopening a final assessment or granting early access
- *   `approve` — faculty approving or rejecting a registration
+ * Actions the matrix distinguishes:
+ *   `read`   — view it
+ *   `write`  — create or change it
+ *   `review` — approve or decline a submission
+ *   `delete` — remove it
  */
-export type AccessLevel = 'read' | 'write' | 'verify' | 'unlock' | 'approve';
+export type AccessLevel = 'read' | 'write' | 'review' | 'delete';
 
 /**
- * The authorization matrix, transcribed from 05_API_Spec "Authorization Matrix"
- * and 07_Security_and_Privacy §2.
- *
  * Read as: for this resource and this action, which relations are permitted.
+ *
+ * The important asymmetries:
+ *   - Only a student writes their own submission. Faculty review it; they never
+ *     author or edit answers, because an answer edited by a reviewer is no longer
+ *     evidence of anything.
+ *   - Only reviewers write questions, and every authenticated user reads them —
+ *     a student has to see the form to fill it in.
  */
 const ACCESS_MATRIX: Record<ResourceKind, Partial<Record<AccessLevel, readonly Relation[]>>> = {
-  // "R own | R assigned | RW scoped | RW"
-  internship: {
-    read: ['owner', 'assigned_mentor', 'scoped_faculty', 'admin'],
-    // A student edits their own registration only while it is still pending; the
-    // route enforces that status rule on top of this relation check.
-    write: ['owner', 'scoped_faculty', 'admin'],
-    approve: ['scoped_faculty', 'admin'],
+  submission: {
+    read: ['owner', 'scoped_faculty', 'admin'],
+    // Deliberately owner-only. Faculty cannot rewrite a student's answers.
+    write: ['owner'],
+    review: ['scoped_faculty', 'admin'],
+    delete: ['admin'],
   },
 
-  // "RW own | R/Verify assigned | RW scoped | RW"
-  attendance: {
-    read: ['owner', 'assigned_mentor', 'scoped_faculty', 'admin'],
-    write: ['owner', 'scoped_faculty', 'admin'],
-    verify: ['assigned_mentor', 'scoped_faculty', 'admin'],
+  question: {
+    // Any authenticated user, since a student must see the form.
+    read: ['owner', 'scoped_faculty', 'admin'],
+    write: ['scoped_faculty', 'admin'],
+    delete: ['admin'],
   },
 
-  // "RW own | R assigned | RW scoped | RW"
-  work_log: {
-    read: ['owner', 'assigned_mentor', 'scoped_faculty', 'admin'],
-    write: ['owner', 'scoped_faculty', 'admin'],
-  },
-
-  weekly_report: {
-    read: ['owner', 'assigned_mentor', 'scoped_faculty', 'admin'],
-    write: ['owner', 'scoped_faculty', 'admin'],
-  },
-
-  // "RW own | — | R/Unlock | RW" — note the mentor has no access at all.
-  final_assessment: {
+  student: {
     read: ['owner', 'scoped_faculty', 'admin'],
     write: ['owner', 'admin'],
-    unlock: ['scoped_faculty', 'admin'],
+    delete: ['admin'],
   },
 
-  // "R own | RW assigned | R scoped | RW" — faculty may read but not author.
-  mentor_evaluation: {
-    read: ['owner', 'assigned_mentor', 'scoped_faculty', 'admin'],
-    write: ['assigned_mentor', 'admin'],
-    // Reopening a confirmed evaluation (02_SRS §2.6).
-    unlock: ['scoped_faculty', 'admin'],
-  },
-
-  // "RW own | R assigned | RW scoped | RW"
   document: {
-    read: ['owner', 'assigned_mentor', 'scoped_faculty', 'admin'],
-    write: ['owner', 'scoped_faculty', 'admin'],
-    verify: ['scoped_faculty', 'admin'],
+    read: ['owner', 'scoped_faculty', 'admin'],
+    write: ['owner'],
+    delete: ['owner', 'admin'],
   },
 };
 
-/** The internship fields needed to decide a relation. */
-export interface InternshipScope {
+export function canAccess(relation: Relation, resource: ResourceKind, level: AccessLevel): boolean {
+  if (relation === 'none') return false;
+  return ACCESS_MATRIX[resource][level]?.includes(relation) ?? false;
+}
+
+// ---------------------------------------------------------------------------
+// Relation resolution
+// ---------------------------------------------------------------------------
+
+/** The student fields needed to decide a relation. */
+export interface StudentScope {
   id: string;
-  studentId: string;
-  mentorId: string | null;
-  facultyCoordinatorId: string | null;
-  student: { departmentId: string | null };
+  departmentId: string | null;
 }
 
 /**
- * Works out how the caller relates to an internship.
+ * Works out how the caller relates to a record belonging to `student`.
  *
- * Faculty scope is the union of two things: being the named coordinator for that
- * internship, or belonging to the student's department. 02_SRS §1.1 describes
- * faculty access as scoped "to department/administrative assignment", which is
- * both of those.
+ * Faculty scope is departmental. A faculty member with no department set resolves
+ * to `none` rather than to everything, which is the fail-closed choice: an
+ * unconfigured account should be useless, not omnipotent.
  */
-export function resolveRelation(auth: AuthContext, internship: InternshipScope): Relation {
+export function resolveRelation(auth: AuthContext, student: StudentScope): Relation {
   if (isAdmin(auth)) return 'admin';
 
   if (isStudent(auth)) {
-    return auth.studentId && internship.studentId === auth.studentId ? 'owner' : 'none';
-  }
-
-  if (isMentor(auth)) {
-    return auth.mentorId && internship.mentorId === auth.mentorId ? 'assigned_mentor' : 'none';
+    return auth.studentId && student.id === auth.studentId ? 'owner' : 'none';
   }
 
   if (isFaculty(auth)) {
-    if (internship.facultyCoordinatorId === auth.userId) return 'scoped_faculty';
     if (
       auth.departmentId !== null &&
-      internship.student.departmentId !== null &&
-      internship.student.departmentId === auth.departmentId
+      student.departmentId !== null &&
+      student.departmentId === auth.departmentId
     ) {
       return 'scoped_faculty';
     }
@@ -181,62 +160,55 @@ export function resolveRelation(auth: AuthContext, internship: InternshipScope):
   return 'none';
 }
 
-export function canAccess(
-  relation: Relation,
-  resource: ResourceKind,
-  level: AccessLevel,
-): boolean {
-  if (relation === 'none') return false;
-  return ACCESS_MATRIX[resource][level]?.includes(relation) ?? false;
-}
+// ---------------------------------------------------------------------------
+// Assertions
+// ---------------------------------------------------------------------------
 
 /**
- * Loads an internship and asserts the caller may perform `level` on `resource`
- * within it. Returns the scope so callers do not query twice.
+ * Loads a submission and asserts the caller may perform `level` on it.
  *
- * This is the single choke point for internship-scoped authorization — attendance,
- * work logs, weekly reports, assessments and documents all route through it.
+ * Returns the loaded row so callers do not query twice. This is the single choke
+ * point for submission authorization.
  */
-export async function assertInternshipAccess(
+export async function assertSubmissionAccess(
   auth: AuthContext,
-  internshipId: string,
-  resource: ResourceKind,
+  submissionId: string,
   level: AccessLevel,
-): Promise<InternshipScope> {
-  const internship = await prisma.internship.findUnique({
-    where: { id: internshipId },
+): Promise<{ id: string; studentId: string; status: string; submissionDate: Date }> {
+  const submission = await prisma.dailySubmission.findUnique({
+    where: { id: submissionId },
     select: {
       id: true,
       studentId: true,
-      mentorId: true,
-      facultyCoordinatorId: true,
-      student: { select: { departmentId: true } },
+      status: true,
+      submissionDate: true,
+      student: { select: { id: true, departmentId: true } },
     },
   });
 
-  if (!internship) {
-    throw notFound('Internship not found.');
+  if (!submission) {
+    throw notFound('Submission not found.');
   }
 
-  const relation = resolveRelation(auth, internship);
-  if (!canAccess(relation, resource, level)) {
+  const relation = resolveRelation(auth, submission.student);
+  if (!canAccess(relation, 'submission', level)) {
     throw forbidden('You do not have permission to do that.');
   }
 
-  return internship;
+  return {
+    id: submission.id,
+    studentId: submission.studentId,
+    status: submission.status,
+    submissionDate: submission.submissionDate,
+  };
 }
 
-/**
- * Asserts the caller may read or write a student's profile.
- *
- * 07_Security_and_Privacy §2 "Own profile" row: student RW, faculty R, admin RW,
- * mentor none. Faculty reads are department-scoped.
- */
+/** Asserts the caller may read or write a student's profile. */
 export async function assertStudentAccess(
   auth: AuthContext,
   studentId: string,
-  level: 'read' | 'write',
-): Promise<{ id: string; departmentId: string | null }> {
+  level: AccessLevel,
+): Promise<StudentScope> {
   const student = await prisma.student.findUnique({
     where: { id: studentId },
     select: { id: true, departmentId: true },
@@ -246,28 +218,62 @@ export async function assertStudentAccess(
     throw notFound('Student not found.');
   }
 
-  if (isAdmin(auth)) return student;
+  const relation = resolveRelation(auth, student);
+  if (!canAccess(relation, 'student', level)) {
+    throw forbidden('You do not have permission to do that.');
+  }
 
-  if (isStudent(auth)) {
-    if (auth.studentId !== student.id) {
+  return student;
+}
+
+/**
+ * Asserts the caller may act on a document.
+ *
+ * Ownership is by `ownerUserId` rather than through the submission, because an
+ * upload URL is issued before the document is attached to anything.
+ */
+export async function assertDocumentAccess(
+  auth: AuthContext,
+  documentId: string,
+  level: AccessLevel,
+): Promise<{ id: string; ownerUserId: string; submissionId: string | null; storageKey: string }> {
+  const document = await prisma.document.findFirst({
+    where: { id: documentId, deletedAt: null },
+    select: {
+      id: true,
+      ownerUserId: true,
+      submissionId: true,
+      storageKey: true,
+      submission: { select: { student: { select: { id: true, departmentId: true } } } },
+    },
+  });
+
+  if (!document) {
+    throw notFound('Document not found.');
+  }
+
+  // The uploader always owns their file, attached or not.
+  if (document.ownerUserId === auth.userId) {
+    if (!canAccess('owner', 'document', level)) {
       throw forbidden('You do not have permission to do that.');
     }
-    return student;
+    return document;
   }
 
-  if (isFaculty(auth) && level === 'read') {
-    // Department match, or the faculty member coordinates one of this student's
-    // internships.
-    if (auth.departmentId && student.departmentId === auth.departmentId) {
-      return student;
-    }
-    const coordinated = await prisma.internship.count({
-      where: { studentId: student.id, facultyCoordinatorId: auth.userId },
-    });
-    if (coordinated > 0) return student;
+  if (isAdmin(auth)) return document;
+
+  // Otherwise the only route in is through the submission it belongs to.
+  const student = document.submission?.student;
+  if (!student) {
+    throw forbidden('You do not have permission to do that.');
   }
 
-  throw forbidden('You do not have permission to do that.');
+  const relation = resolveRelation(auth, student);
+  if (!canAccess(relation, 'document', level)) {
+    throw forbidden('You do not have permission to do that.');
+  }
+
+  return document;
 }
 
 // ---------------------------------------------------------------------------
@@ -275,35 +281,11 @@ export async function assertStudentAccess(
 // ---------------------------------------------------------------------------
 
 /**
- * Prisma `where` fragment restricting internships to what the caller may see.
+ * Prisma `where` fragment restricting students to what the caller may see.
  *
- * Applied to every list and dashboard query. Returning an impossible predicate
- * for an unrecognised role means a new role added later shows nothing until it is
- * explicitly handled, rather than seeing everything.
+ * An unrecognised role gets an impossible predicate, so a role added later shows
+ * nothing until it is handled explicitly rather than seeing every student.
  */
-export function internshipScopeFilter(auth: AuthContext): Record<string, unknown> {
-  if (isAdmin(auth)) return {};
-
-  if (isStudent(auth)) {
-    return { studentId: auth.studentId ?? '__none__' };
-  }
-
-  if (isMentor(auth)) {
-    return { mentorId: auth.mentorId ?? '__none__' };
-  }
-
-  if (isFaculty(auth)) {
-    const clauses: Record<string, unknown>[] = [{ facultyCoordinatorId: auth.userId }];
-    if (auth.departmentId) {
-      clauses.push({ student: { departmentId: auth.departmentId } });
-    }
-    return { OR: clauses };
-  }
-
-  return { id: '__none__' };
-}
-
-/** The same idea for student lists (the faculty student directory). */
 export function studentScopeFilter(auth: AuthContext): Record<string, unknown> {
   if (isAdmin(auth)) return {};
 
@@ -311,29 +293,51 @@ export function studentScopeFilter(auth: AuthContext): Record<string, unknown> {
     return { id: auth.studentId ?? '__none__' };
   }
 
-  if (isMentor(auth)) {
-    return { internships: { some: { mentorId: auth.mentorId ?? '__none__' } } };
+  if (isFaculty(auth)) {
+    // No department means no students, not all students.
+    return { departmentId: auth.departmentId ?? '__none__' };
+  }
+
+  return { id: '__none__' };
+}
+
+/** The same idea for submission lists. */
+export function submissionScopeFilter(auth: AuthContext): Record<string, unknown> {
+  if (isAdmin(auth)) return {};
+
+  if (isStudent(auth)) {
+    return { studentId: auth.studentId ?? '__none__' };
   }
 
   if (isFaculty(auth)) {
-    const clauses: Record<string, unknown>[] = [
-      { internships: { some: { facultyCoordinatorId: auth.userId } } },
-    ];
-    if (auth.departmentId) {
-      clauses.push({ departmentId: auth.departmentId });
-    }
-    return { OR: clauses };
+    return { student: { departmentId: auth.departmentId ?? '__none__' } };
   }
 
   return { id: '__none__' };
 }
 
 /**
+ * Which questions apply to the caller.
+ *
+ * A question with a null `departmentId` applies to everyone; one with a department
+ * applies only there. A student sees the union of global questions and their own
+ * department's.
+ */
+export function questionScopeFilter(auth: AuthContext): Record<string, unknown> {
+  if (isAdmin(auth)) return {};
+
+  // `departmentId` on the context already resolves a student's department from
+  // their student record, so this works for both roles.
+  return {
+    OR: [{ departmentId: null }, ...(auth.departmentId ? [{ departmentId: auth.departmentId }] : [])],
+  };
+}
+
+/**
  * Whether the caller may see a student's personal contact details.
  *
- * 07_Security_and_Privacy §8: "Faculty sees student name/register number — not
- * mobile number unless needed." Owners and admins see everything; faculty and
- * mentors get the mobile number redacted.
+ * Faculty see name and register number, which is what reviewing requires; the
+ * mobile number is not needed to do that job, so it is withheld.
  */
 export function canSeeContactDetails(auth: AuthContext, studentId: string): boolean {
   if (isAdmin(auth)) return true;

@@ -27,8 +27,12 @@ export interface AuthContext {
   email: string;
   role: UserRole;
   name: string;
+  /** Present only for students. Every student-scoped query keys off this. */
   studentId: string | null;
-  mentorId: string | null;
+  /**
+   * For a student this is their student record's department; for faculty it is
+   * their own. Resolved here so callers never have to know which.
+   */
   departmentId: string | null;
   request: RequestContext;
 }
@@ -81,7 +85,6 @@ export async function requireAuth(request: NextRequest): Promise<AuthContext> {
       name: true,
       departmentId: true,
       student: { select: { id: true, name: true, departmentId: true } },
-      mentor: { select: { id: true, name: true } },
     },
   });
 
@@ -98,9 +101,8 @@ export async function requireAuth(request: NextRequest): Promise<AuthContext> {
     authId: user.authId,
     email: user.email,
     role: user.role,
-    name: user.student?.name ?? user.mentor?.name ?? user.name ?? user.email.split('@')[0]!,
+    name: user.student?.name ?? user.name ?? user.email.split('@')[0]!,
     studentId: user.student?.id ?? null,
-    mentorId: user.mentor?.id ?? null,
     departmentId: user.departmentId ?? user.student?.departmentId ?? null,
   };
 

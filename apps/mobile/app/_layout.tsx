@@ -10,7 +10,7 @@
  * took the whole app down before the first render.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
@@ -24,9 +24,9 @@ void SplashScreen.preventAutoHideAsync();
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Data changes at most a few times per day (attendance, work log). 5 minutes
-      // means navigating between tabs serves from cache instantly rather than
-      // firing a network request on every mount/focus.
+      // A student submits once a day and a reviewer decides once per submission, so
+      // 5 minutes of staleness is generous. Navigating between tabs then serves from
+      // cache instead of firing a request on every mount.
       staleTime: 5 * 60 * 1000, // 5 minutes
 
       // Keep unmounted query data in memory for 30 minutes so returning to a
@@ -41,8 +41,10 @@ export const queryClient = new QueryClient({
       },
     },
     mutations: {
-      // Attendance and work-log writes are idempotent by clientId and go through
-      // the offline queue; a blind retry here could create a duplicate.
+      // No blind retries on writes. Submitting answers upserts on
+      // (student, date) so a repeat is harmless, but a review decision is
+      // rejected once already decided — retrying it would surface a confusing
+      // "already reviewed" error instead of the original failure.
       retry: false,
     },
   },
@@ -51,7 +53,6 @@ export const queryClient = new QueryClient({
 export default function RootLayout() {
   const bootstrap = useAuthStore((state) => state.bootstrap);
   const isBootstrapping = useAuthStore((state) => state.isBootstrapping);
-  const [syncStarted, setSyncStarted] = useState(false);
 
   useEffect(() => {
     // Never leave the user on a blank splash screen if the session check stalls.
@@ -70,22 +71,6 @@ export default function RootLayout() {
     if (isBootstrapping) return;
     void SplashScreen.hideAsync();
   }, [isBootstrapping]);
-
-  // Start the offline sync engine after the first render, and only once. It pulls
-  // in SQLite and NetInfo, so a failure here must not prevent the app rendering.
-  useEffect(() => {
-    if (isBootstrapping || syncStarted) return;
-    setSyncStarted(true);
-
-    void (async () => {
-      try {
-        const { useSyncStore } = await import('@/stores/syncStore');
-        useSyncStore.getState().start();
-      } catch {
-        // Offline support unavailable in this runtime; the app still works online.
-      }
-    })();
-  }, [isBootstrapping, syncStarted]);
 
   // Splash screen is still up; rendering a tree here would only be redirected away.
   if (isBootstrapping) return null;
@@ -106,7 +91,7 @@ export default function RootLayout() {
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="(student)" options={{ headerShown: false }} />
           <Stack.Screen name="(faculty)" options={{ headerShown: false }} />
-          <Stack.Screen name="(mentor)" options={{ headerShown: false }} />
+
         </Stack>
       </QueryClientProvider>
     </SafeAreaProvider>

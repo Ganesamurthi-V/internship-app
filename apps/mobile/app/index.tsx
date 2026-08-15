@@ -1,15 +1,15 @@
 /**
- * Launch router — the decision tree in 06_App_Flow §2.
+ * Launch router.
  *
  *   authenticated?
- *     YES -> role check -> student | faculty | mentor | admin dashboard
+ *     YES -> role check -> student | faculty dashboard
  *     NO  -> login
  *
- * The root layout has already finished the session restore by the time this
- * renders, so this is a pure redirect with no loading state of its own.
+ * The root layout has already finished the session restore by the time this renders,
+ * so this is a pure redirect with no loading state of its own.
  *
- * Admin routes to the faculty dashboard: 01_PRD §3 puts admins on the web portal,
- * and the backend leaves the faculty dashboard unscoped for them.
+ * Admin routes to the faculty dashboard: the capabilities are identical and only the
+ * data scope differs, which the backend already handles.
  */
 
 import { Redirect } from 'expo-router';
@@ -27,8 +27,6 @@ export default function Index() {
     case 'faculty':
     case 'admin':
       return <Redirect href="/(faculty)/dashboard" />;
-    case 'mentor':
-      return <Redirect href="/(mentor)/dashboard" />;
     case 'student':
       return <Redirect href="/(student)/dashboard" />;
     default:

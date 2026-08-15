@@ -1,5 +1,5 @@
 /**
- * Forgot password — 12_Mobile_App_Spec §2.
+ * Forgot password â€” 12_Mobile_App_Spec Â§2.
  *
  * The success message is shown whether or not the address is registered, because the
  * endpoint deliberately does not disclose that (it would be an email enumeration
@@ -55,7 +55,7 @@ export default function ForgotPasswordScreen() {
 
   if (submitted) {
     return (
-      <Screen hideOfflineBanner>
+      <Screen>
         <View style={styles.header}>
           <Text style={styles.title}>Check your email</Text>
           <Text style={styles.body}>
@@ -69,7 +69,7 @@ export default function ForgotPasswordScreen() {
   }
 
   return (
-    <Screen hideOfflineBanner>
+    <Screen>
       <View style={styles.header}>
         <Text style={styles.title}>Reset your password</Text>
         <Text style={styles.body}>

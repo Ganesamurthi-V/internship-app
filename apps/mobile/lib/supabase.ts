@@ -1,17 +1,19 @@
 /**
  * Supabase client for the mobile app.
  *
- * SESSION STORAGE: In-memory with no crash path.
+ * SESSION STORAGE: in memory, deliberately.
  *
- * We tried expo-secure-store (2048-byte limit breaks Supabase JWTs) and
- * @react-native-async-storage/async-storage v3 (native module null in Expo Go).
- * Both fail in Expo Go but work in development builds.
+ * Two native-backed options were tried and rejected. `expo-secure-store` caps a
+ * single value at 2048 bytes and a Supabase session exceeds that, so writes failed
+ * silently and login appeared to succeed then immediately sign out.
+ * `@react-native-async-storage/async-storage` v3 throws `Native module is null` in
+ * Expo Go. The adapter below is therefore a plain `Map`.
  *
- * For Expo Go development: sessions live in a JS Map. They survive hot-reloads
- * (same JS context) but not full app kills. That's acceptable for development.
- *
- * For production (eas build): swap the adapter to expo-secure-store with chunking,
- * or use AsyncStorage v2 which is bundled in dev builds.
+ * Consequence worth knowing: the session survives a hot reload (same JS context)
+ * but not a full app kill, so the user signs in again after force-quitting. That is
+ * acceptable for development and is the one thing to change before shipping —
+ * either a SecureStore adapter that chunks the value across several keys, or
+ * AsyncStorage v2 in a development build.
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';

@@ -105,7 +105,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       message:
         error instanceof Error && error.name === 'AbortError'
           ? 'Request cancelled.'
-          : 'No connection. Your work will be saved and synced automatically.',
+          : 'No connection. Check your network and try again.',
       status: 0,
     });
   }
@@ -157,7 +157,7 @@ async function requestList<T>(
   } catch {
     throw new ApiError({
       code: 'NETWORK_ERROR',
-      message: 'No connection. Showing the last data we have.',
+      message: 'No connection. Check your network and try again.',
       status: 0,
     });
   }

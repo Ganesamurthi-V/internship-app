@@ -1,10 +1,12 @@
 /**
- * Builds the `AuthenticatedUser` blob returned by login and `GET /api/auth/me`.
+ * Builds the `AuthenticatedUser` blob returned by `GET /api/auth/me`.
  *
- * Takes a Supabase `auth_id` and resolves it to the application user.
+ * Takes a Supabase `auth_id` and resolves it to the application user. This is the
+ * one place the client learns its own `studentId`, which every student-scoped
+ * endpoint then derives server-side rather than accepting from the request.
  */
 
-import type { AuthenticatedUser, UserRole } from '@ims/shared-types';
+import type { AuthenticatedUser, UserRole, UserStatus } from '@ims/shared-types';
 import { prisma } from '@/lib/prisma';
 import { unauthorized } from '@/lib/errors';
 
@@ -15,41 +17,32 @@ export async function buildAuthenticatedUser(authId: string): Promise<Authentica
       id: true,
       email: true,
       role: true,
+      status: true,
       name: true,
-      student: {
-        select: {
-          id: true,
-          name: true,
-          internships: {
-            where: { status: { in: ['approved', 'active', 'pending'] } },
-            orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
-            take: 1,
-            select: { id: true },
-          },
-        },
-      },
-      mentor: { select: { id: true, name: true } },
+      departmentId: true,
+      student: { select: { id: true, name: true, departmentId: true } },
     },
   });
 
   if (!user) {
-    throw unauthorized('Your account is not set up. Sign up first or contact your department office.');
+    throw unauthorized(
+      'Your account is not set up. Contact your department office.',
+    );
   }
 
   const identity: AuthenticatedUser = {
     id: user.id,
     email: user.email,
     role: user.role as UserRole,
-    name: user.student?.name ?? user.mentor?.name ?? user.name ?? user.email.split('@')[0]!,
+    status: user.status as UserStatus,
+    name: user.student?.name ?? user.name ?? user.email.split('@')[0]!,
+    // A student's department lives on their student record; faculty carry their
+    // own. Resolving it here means callers never have to know which.
+    departmentId: user.departmentId ?? user.student?.departmentId ?? null,
   };
 
   if (user.student) {
     identity.studentId = user.student.id;
-    identity.activeInternshipId = user.student.internships[0]?.id ?? null;
-  }
-
-  if (user.mentor) {
-    identity.mentorId = user.mentor.id;
   }
 
   return identity;

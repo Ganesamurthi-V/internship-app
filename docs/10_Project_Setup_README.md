@@ -1,242 +1,167 @@
-# Internship Management System — Project Start Guide (Mobile)
+# 10 — Project Setup
 
-> **Version 2.0** | React Native (Expo) + Next.js API + PostgreSQL
+## 1. Prerequisites
 
----
+| Tool | Version |
+|------|---------|
+| Node.js | 20+ |
+| pnpm | 9+ (`corepack prepare pnpm@9.15.4 --activate`) |
+| Supabase project | With Postgres, Auth, and Storage enabled |
 
-## Prerequisites
-
-| Tool | Version | Install |
-|---|---|---|
-| Node.js | 20 LTS | https://nodejs.org |
-| pnpm | 9+ | `npm i -g pnpm` |
-| Expo CLI | latest | `npm i -g expo-cli` |
-| EAS CLI | latest | `npm i -g eas-cli` |
-| PostgreSQL | 16 | Local or Supabase |
-| Xcode | 15+ | Mac only (iOS Simulator) |
-| Android Studio | latest | Android Emulator |
-| Git | — | — |
-
----
-
-## Repository Structure
+## 2. Repository Structure
 
 ```
-internship-management/
-├── apps/
-│   ├── mobile/                     # React Native / Expo app (iOS + Android)
-│   │   ├── app/                    # Expo Router v3 (file-based)
-│   │   │   ├── (auth)/
-│   │   │   │   ├── login.tsx
-│   │   │   │   └── forgot-password.tsx
-│   │   │   ├── (student)/
-│   │   │   │   ├── _layout.tsx     # Tab navigator for students
-│   │   │   │   ├── dashboard.tsx
-│   │   │   │   ├── internship/
-│   │   │   │   ├── attendance/
-│   │   │   │   ├── work-log/
-│   │   │   │   ├── weekly-report/
-│   │   │   │   ├── final-assessment/
-│   │   │   │   └── documents/
-│   │   │   ├── (faculty)/
-│   │   │   ├── (mentor)/
-│   │   │   └── (admin)/
-│   │   ├── components/
-│   │   │   ├── forms/
-│   │   │   ├── ui/
-│   │   │   └── shared/
-│   │   ├── lib/
-│   │   │   ├── api/                # Typed fetch wrappers
-│   │   │   ├── db/                 # WatermelonDB schema + models
-│   │   │   ├── sync/               # Offline sync engine
-│   │   │   ├── auth/               # Token management
-│   │   │   └── notifications/      # Push handlers + deep links
-│   │   ├── stores/                 # Zustand global state
-│   │   ├── hooks/                  # useTodayLog, useAttendanceSummary, etc.
-│   │   ├── constants/              # Colors, dimensions, enums
-│   │   ├── app.json                # Expo project config
-│   │   ├── eas.json                # EAS profiles
-│   │   └── babel.config.js
-│   │
-│   └── web/                        # Next.js (faculty/admin web portal)
-│       └── app/
-│
 ├── packages/
-│   ├── shared-types/               # TypeScript interfaces shared by mobile + API
-│   │   └── src/index.ts
-│   └── shared-validation/          # Zod schemas used on mobile + server
-│       └── src/index.ts
-│
-├── backend/                        # Next.js API or NestJS
-│   ├── src/
-│   │   ├── auth/
-│   │   ├── students/
-│   │   ├── internships/
-│   │   ├── attendance/
-│   │   ├── work-logs/
-│   │   ├── weekly-reports/
-│   │   ├── final-assessments/
-│   │   ├── mentor-evaluations/
-│   │   ├── documents/
-│   │   ├── reports/
-│   │   └── notifications/
-│   └── prisma/
-│       ├── schema.prisma
-│       └── migrations/
-│
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── e2e/                        # Maestro test flows
-│       ├── student_registration.yaml
-│       ├── daily_log.yaml
-│       └── faculty_evidence_export.yaml
-│
-├── .env.example
-├── pnpm-workspace.yaml
-├── turbo.json                       # Turborepo build pipeline
-└── README.md
+│   ├── shared-types/          # Enums, entity types, constants
+│   └── shared-validation/     # Zod schemas, validators
+├── backend/                   # Next.js 15 API
+│   ├── prisma/
+│   │   ├── schema.prisma      # 8 models
+│   │   ├── migrations/
+│   │   └── seed.ts
+│   └── src/
+│       ├── app/api/           # Route handlers
+│       ├── lib/               # Auth, storage, audit, rate limit
+│       └── server/            # Business logic
+├── apps/
+│   └── mobile/                # Expo SDK 57 + React Native 0.86
+│       ├── app/               # File-based routes (expo-router)
+│       ├── components/
+│       ├── lib/
+│       └── constants/
+└── docs/                      # This documentation
 ```
 
----
+## 3. Installation
 
-## Initial Setup
-
-### 1. Clone and install
 ```bash
-git clone <repo-url> internship-management
-cd internship-management
 pnpm install
 ```
 
-### 2. Environment variables
+> `.npmrc` sets `node-linker=hoisted` — required for Metro bundler compatibility with pnpm.
 
-Copy `.env.example` to `.env` in each app:
-```bash
-cp .env.example backend/.env
-cp .env.example apps/mobile/.env
-```
+## 4. Supabase Setup
 
-**.env (backend)**
+### 4.1 Create Project
+1. Go to [supabase.com](https://supabase.com) and create a new project
+2. Note the project reference ID, region, and database password
+
+### 4.2 Configure Storage
+1. Create a private bucket named `documents`
+2. No public access policies
+
+### 4.3 Configure Auth
+1. Enable email/password sign-in
+2. Configure password reset email template
+3. Set redirect URL for reset flow
+
+## 5. Environment Variables
+
+### Backend (`backend/.env`)
+
 ```env
-DATABASE_URL=postgresql://user:pass@localhost:5432/internship_db
-AUTH_SECRET=<generate: openssl rand -base64 32>
-AUTH_ACCESS_TOKEN_EXPIRY=900      # 15 minutes (seconds)
-AUTH_REFRESH_TOKEN_EXPIRY=2592000 # 30 days (seconds)
-STORAGE_ENDPOINT=https://your-storage-endpoint
-STORAGE_BUCKET=internship-documents
-STORAGE_ACCESS_KEY=
-STORAGE_SECRET_KEY=
-APP_URL=https://api.your-institution.edu
-EXPO_PUSH_API_URL=https://exp.host/--/api/v2/push/send
-REDIS_URL=redis://localhost:6379
+# Pooled connection (port 6543) — runtime queries
+DATABASE_URL=postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-REGION.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1
+
+# Direct connection (port 5432) — Prisma Migrate only
+DIRECT_URL=postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres
+
+# Supabase project
+SUPABASE_URL=https://PROJECT_REF.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=...    # Never expose to client
+SUPABASE_JWT_SECRET=...          # From Project Settings → API
+
+# App
+NODE_ENV=development
 ```
 
-**.env (mobile) — no secrets here**
+### Mobile (`apps/mobile/.env`)
+
 ```env
-EXPO_PUBLIC_API_URL=https://api.your-institution.edu/api
-EXPO_PUBLIC_APP_ENV=development
+EXPO_PUBLIC_API_URL=http://YOUR_LAN_IP:3000
+EXPO_PUBLIC_SUPABASE_URL=https://PROJECT_REF.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=...
 ```
 
-> Never commit secrets. Add `.env` to `.gitignore`. Use EAS Secrets for build-time env vars.
+> Use your machine's LAN IP for `EXPO_PUBLIC_API_URL` — `localhost` on a physical device means the device itself.
 
-### 3. Database setup
+## 6. Database Setup
+
 ```bash
 cd backend
-pnpm prisma migrate dev --name init
-pnpm prisma db seed                 # creates admin user, departments
+
+# Apply migrations
+pnpm prisma:deploy
+
+# Seed development data
+pnpm prisma:seed
 ```
 
-### 4. Run backend
+The seed creates:
+- Admin account: admin@smvec.ac.in
+- Faculty account: faculty@smvec.ac.in (CSE department)
+- Student accounts: praveen@smvec.ac.in, divya@smvec.ac.in, arjun@smvec.ac.in
+- Departments: CSE, ECE, MECH, etc.
+- Sample questions
+
+## 7. Running
+
+### Backend
 ```bash
 cd backend
-pnpm dev                            # Next.js on http://localhost:3000
+pnpm dev          # http://localhost:3000
 ```
 
-### 5. Run mobile app
+### Mobile
 ```bash
 cd apps/mobile
-npx expo start                      # Scan QR with Expo Go
-npx expo start --ios                # iOS Simulator (Mac only)
-npx expo start --android            # Android Emulator
+pnpm start        # Starts Expo dev server
 ```
 
----
+Scan QR code with Expo Go (iOS/Android) or press `i`/`a` for simulator.
 
-## EAS Build (CI/CD)
-
-### Setup EAS
+### Type Checking
 ```bash
-cd apps/mobile
-eas login
-eas build:configure
+pnpm typecheck    # All workspaces
 ```
 
-### Build for device testing
+### Tests
 ```bash
-# Android APK (internal testing)
-eas build --platform android --profile preview
-
-# iOS IPA (TestFlight)
-eas build --platform ios --profile preview
+pnpm test         # All workspaces
 ```
 
-### Production build + submission
-```bash
-eas build --platform all --profile production
-eas submit --platform ios      # Submits to App Store Connect
-eas submit --platform android  # Submits to Google Play
+## 8. Development Commands
+
+| Command | Location | Purpose |
+|---------|----------|---------|
+| `pnpm dev` | backend/ | Start API server |
+| `pnpm start` | apps/mobile/ | Start Expo |
+| `pnpm typecheck` | root | Check all TypeScript |
+| `pnpm test` | root | Run all tests |
+| `pnpm prisma:studio` | backend/ | Browse database |
+| `pnpm prisma:migrate` | backend/ | Create new migration |
+| `pnpm prisma:deploy` | backend/ | Apply pending migrations |
+| `pnpm prisma:seed` | backend/ | Seed data |
+
+## 9. Known Build Issues
+
+### Zod singleton
+Zod must exist exactly once in node_modules. Two copies cause `tsc` to hang with TS2589 and break `instanceof ZodError`. It's declared in root `package.json` and listed as `peerDependency` in shared-validation.
+
+### React singleton
+React must also exist once. Expo SDK 57 pins `react@19.2.3`. The backend aligns to this version. Two copies cause Next.js prerender failures.
+
+**Diagnostic:**
+```powershell
+Get-ChildItem -Recurse -Directory -Filter "zod" -Path . | Select-Object FullName
 ```
 
-### OTA JavaScript update (no store review)
-```bash
-eas update --branch production --message "Fix offline sync bug"
-```
+### Zustand curried form
+Zustand v5 requires `create<T>()(...)` (curried) when the state type is explicit. The single-call form silently leaves selectors as `any`.
 
----
+## 10. Deployment Notes
 
-## First Development Milestone
-
-The first usable milestone must demonstrate:
-
-1. Student can login on a real iPhone and Android phone simultaneously.
-2. Student can register an internship (fill form, upload 2 documents).
-3. Faculty can approve the internship on their device.
-4. Student receives push notification of approval.
-5. Student can mark attendance (online and offline).
-6. Student can submit a work log.
-7. Faculty can see today's submissions on their dashboard.
-
-Only after this full loop works should weekly reports, final assessment, mentor evaluation, and evidence reporting be added.
-
----
-
-## Useful Commands
-
-```bash
-# Type-check entire monorepo
-pnpm typecheck
-
-# Run all unit tests
-pnpm test
-
-# Run E2E (Maestro — requires device/emulator running)
-maestro test tests/e2e/student_registration.yaml
-
-# Generate Prisma client after schema change
-cd backend && pnpm prisma generate
-
-# Reset local database
-cd backend && pnpm prisma migrate reset
-
-# View WatermelonDB local data (debug)
-# Connect to emulator via adb and pull SQLite file
-adb shell "run-as com.yourapp cp /data/data/com.yourapp/databases/watermelon.db /sdcard/"
-adb pull /sdcard/watermelon.db
-```
-
----
-
-## Source
-
-Requirements are based on the uploaded internship app guide (DOCX) and the original 11-document technical package. Mobile-specific architecture (React Native, Expo, WatermelonDB, offline sync, push notifications, EAS Build) are implementation recommendations added during the v2.0 mobile enhancement pass.
+- Backend deploys to any Node.js 20+ platform (Vercel, Railway, etc.)
+- Mobile builds via EAS Build (see `apps/mobile/eas.json`)
+- Two database connection strings required (pooled for runtime, direct for migrations)
+- Rate limiting is in-process; for multi-instance, implement Redis-backed `RateLimitStore`

@@ -1,389 +1,205 @@
-# Database Design — Enhanced for Mobile App
+# 04 — Database Design
 
-> **Version 2.0** | PostgreSQL (server) + WatermelonDB/SQLite (mobile local)
+## 1. Overview
 
----
-
-## 1. Entity Model
+8 models, hosted on Supabase PostgreSQL, managed by Prisma 6.
 
 ```
-User
- ├── Student
- │    └── Internship
- │         ├── Attendance
- │         ├── DailyWorkLog
- │         ├── WeeklyReport
- │         ├── FinalAssessment
- │         │    └── SkillRating
- │         ├── MentorEvaluation
- │         └── InternshipDocument
- │
- ├── Faculty/Admin
- │
- └── Mentor
+User ─────┐
+           ├──── Department
+Student ──┘          │
+    │                │
+    ▼                │
+DailySubmission ◄────┘ (scope)
+    │
+    ├── Answer ──── Question
+    └── Document
 
-Organisation
- └── Internship
-
-Department
- └── Student
-
-DeviceToken         ← NEW: push notifications
-SyncQueue           ← NEW: offline sync tracking
-AuditLog
+AuditLog (standalone)
 ```
 
----
-
-## 2. Server Database Tables (PostgreSQL)
-
-### users
-```sql
-id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-email           TEXT UNIQUE NOT NULL
-password_hash   TEXT                          -- null if SSO
-role            TEXT NOT NULL CHECK (role IN ('student','faculty','mentor','admin'))
-status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','pending'))
-created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-
-### user_sessions
-```sql
-id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE
-refresh_token   TEXT UNIQUE NOT NULL
-client_platform TEXT CHECK (client_platform IN ('ios','android','web'))
-client_version  TEXT
-expires_at      TIMESTAMPTZ NOT NULL
-revoked_at      TIMESTAMPTZ
-created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-
-### device_tokens  ← NEW (push notifications)
-```sql
-id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE
-expo_push_token TEXT NOT NULL
-platform        TEXT NOT NULL CHECK (platform IN ('ios','android'))
-app_version     TEXT
-last_active_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-UNIQUE (user_id, expo_push_token)
-```
-
-### departments
-```sql
-id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-name            TEXT NOT NULL
-institution     TEXT NOT NULL DEFAULT 'Sri Manakula Vinayagar Engineering College'
-created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-
-### students
-```sql
-id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-user_id         UUID UNIQUE NOT NULL REFERENCES users(id)
-register_number TEXT UNIQUE NOT NULL
-name            TEXT NOT NULL
-programme       TEXT NOT NULL
-department_id   UUID REFERENCES departments(id)
-year            INTEGER CHECK (year BETWEEN 1 AND 5)
-section         TEXT
-student_email   TEXT NOT NULL
-mobile          TEXT
-created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-
-### organisations
-```sql
-id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-name            TEXT NOT NULL
-location        TEXT
-created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-
-### mentors
-```sql
-id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-user_id         UUID REFERENCES users(id)   -- null until mentor creates account
-name            TEXT NOT NULL
-designation     TEXT
-email           TEXT
-contact         TEXT
-organisation_id UUID REFERENCES organisations(id)
-invite_token    TEXT UNIQUE                 -- secure invite link token
-invite_expires  TIMESTAMPTZ
-created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-
-### internships
-```sql
-id                       UUID PRIMARY KEY DEFAULT gen_random_uuid()
-student_id               UUID NOT NULL REFERENCES students(id)
-organisation_id          UUID REFERENCES organisations(id)
-mentor_id                UUID REFERENCES mentors(id)
-faculty_coordinator_id   UUID REFERENCES users(id)
-domain                   TEXT NOT NULL CHECK (domain IN (
-                           'software_development','data_science_ai_ml',
-                           'cyber_security','cloud_computing','networking',
-                           'web_development','business_management','other'))
-mode                     TEXT NOT NULL CHECK (mode IN ('offline','online','hybrid'))
-start_date               DATE NOT NULL
-end_date                 DATE NOT NULL
-duration_days            INTEGER GENERATED ALWAYS AS (end_date - start_date) STORED
-working_hours_per_day    NUMERIC(4,2) NOT NULL
-status                   TEXT NOT NULL DEFAULT 'pending'
-                           CHECK (status IN ('pending','approved','active','completed','rejected'))
-approved_by              UUID REFERENCES users(id)
-approved_at              TIMESTAMPTZ
-rejection_reason         TEXT
-created_at               TIMESTAMPTZ NOT NULL DEFAULT now()
-updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
-CONSTRAINT valid_dates CHECK (end_date >= start_date)
-```
-
-### attendance
-```sql
-id                   UUID PRIMARY KEY DEFAULT gen_random_uuid()
-internship_id        UUID NOT NULL REFERENCES internships(id)
-student_id           UUID NOT NULL REFERENCES students(id)
-attendance_date      DATE NOT NULL
-status               TEXT NOT NULL CHECK (status IN (
-                       'present','absent','permission_leave','holiday','weekly_off'))
-reporting_time       TIME
-leaving_time         TIME
-total_hours          NUMERIC(5,2) GENERATED ALWAYS AS (
-                       EXTRACT(EPOCH FROM (leaving_time - reporting_time))/3600
-                     ) STORED
-mode                 TEXT CHECK (mode IN ('office','online','hybrid'))
-proof_document_id    UUID REFERENCES documents(id)
-leave_reason         TEXT
-mentor_verified      BOOLEAN NOT NULL DEFAULT false
-mentor_verified_at   TIMESTAMPTZ
-client_id            UUID UNIQUE        -- device-generated UUID for offline dedup
-synced_at            TIMESTAMPTZ        -- when offline record was synced
-created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-UNIQUE (internship_id, attendance_date)
-CONSTRAINT valid_times CHECK (leaving_time IS NULL OR leaving_time > reporting_time)
-```
-
-### daily_work_logs
-```sql
-id                   UUID PRIMARY KEY DEFAULT gen_random_uuid()
-internship_id        UUID NOT NULL REFERENCES internships(id)
-student_id           UUID NOT NULL REFERENCES students(id)
-work_date            DATE NOT NULL
-activities           TEXT NOT NULL
-technologies         TEXT[]              -- array of tags
-task_assigned        TEXT
-completion_status    TEXT CHECK (completion_status IN ('yes','partially','no'))
-learning             TEXT
-challenge            TEXT
-solution             TEXT
-deliverable_type     TEXT CHECK (deliverable_type IN (
-                       'code','documentation','design','analysis',
-                       'testing','presentation','other'))
-evidence_document_id UUID REFERENCES documents(id)
-mentor_interaction   BOOLEAN NOT NULL DEFAULT false
-mentor_feedback      TEXT
-client_id            UUID UNIQUE
-synced_at            TIMESTAMPTZ
-created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-UNIQUE (internship_id, work_date)
-```
-
-### weekly_reports
-```sql
-id                     UUID PRIMARY KEY DEFAULT gen_random_uuid()
-internship_id          UUID NOT NULL REFERENCES internships(id)
-student_id             UUID NOT NULL REFERENCES students(id)
-week_number            INTEGER NOT NULL
-week_start_date        DATE NOT NULL
-week_end_date          DATE NOT NULL
-days_attended          INTEGER          -- auto-aggregated from attendance
-total_hours            NUMERIC(6,2)     -- auto-aggregated from attendance
-major_activities       TEXT
-technologies_learned   TEXT[]
-skills_developed       TEXT[]
-major_assignment       TEXT
-problems               TEXT
-solutions              TEXT
-learning_outcomes      TEXT
-mentor_feedback        TEXT
-student_self_assessment TEXT
-report_document_id     UUID REFERENCES documents(id)
-submitted_at           TIMESTAMPTZ
-created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
-updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
-UNIQUE (internship_id, week_number)
-```
-
-### final_assessments
-```sql
-id                         UUID PRIMARY KEY DEFAULT gen_random_uuid()
-internship_id              UUID UNIQUE NOT NULL REFERENCES internships(id)
-student_id                 UUID NOT NULL REFERENCES students(id)
-completed_successfully     BOOLEAN
-total_days_attended        INTEGER
-total_hours                NUMERIC(6,2)
-major_project              TEXT
-technologies_mastered      TEXT[]
-skills_developed           TEXT[]
-objectives_status          TEXT CHECK (objectives_status IN ('fully','partially','no'))
-usefulness_rating          INTEGER CHECK (usefulness_rating BETWEEN 1 AND 5)
-technical_improvement      TEXT
-employability_improvement  TEXT
-curriculum_relation        TEXT
-real_world_exposure        TEXT
-recommend_organisation     BOOLEAN
-suggestions                TEXT
-submitted_at               TIMESTAMPTZ
-created_at                 TIMESTAMPTZ NOT NULL DEFAULT now()
-updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-
-### skill_ratings  (self-assessment, linked to final_assessment)
-```sql
-id                   UUID PRIMARY KEY DEFAULT gen_random_uuid()
-final_assessment_id  UUID NOT NULL REFERENCES final_assessments(id)
-skill_type           TEXT NOT NULL CHECK (skill_type IN (
-                       'technical_knowledge','problem_solving','communication',
-                       'teamwork','time_management','professional_discipline',
-                       'adaptability','industry_awareness'))
-rating               INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5)
-UNIQUE (final_assessment_id, skill_type)
-```
-
-### mentor_evaluations
-```sql
-id                       UUID PRIMARY KEY DEFAULT gen_random_uuid()
-internship_id            UUID UNIQUE NOT NULL REFERENCES internships(id)
-mentor_id                UUID NOT NULL REFERENCES mentors(id)
-technical_knowledge      INTEGER CHECK (technical_knowledge BETWEEN 1 AND 5)
-problem_solving          INTEGER CHECK (problem_solving BETWEEN 1 AND 5)
-communication            INTEGER CHECK (communication BETWEEN 1 AND 5)
-teamwork                 INTEGER CHECK (teamwork BETWEEN 1 AND 5)
-professional_behaviour   INTEGER CHECK (professional_behaviour BETWEEN 1 AND 5)
-punctuality_attendance   INTEGER CHECK (punctuality_attendance BETWEEN 1 AND 5)
-ability_to_learn         INTEGER CHECK (ability_to_learn BETWEEN 1 AND 5)
-initiative               INTEGER CHECK (initiative BETWEEN 1 AND 5)
-quality_of_work          INTEGER CHECK (quality_of_work BETWEEN 1 AND 5)
-overall_performance      INTEGER CHECK (overall_performance BETWEEN 1 AND 5)
-strengths                TEXT
-improvement_areas        TEXT
-remarks                  TEXT
-employment_recommendation BOOLEAN
-digital_confirmation     BOOLEAN NOT NULL DEFAULT false
-submitted_at             TIMESTAMPTZ
-created_at               TIMESTAMPTZ NOT NULL DEFAULT now()
-updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-
-### documents
-```sql
-id                  UUID PRIMARY KEY DEFAULT gen_random_uuid()
-owner_user_id       UUID NOT NULL REFERENCES users(id)
-document_type       TEXT NOT NULL CHECK (document_type IN (
-                      'offer_letter','joining_proof','completion_certificate',
-                      'internship_report','project_report','attendance_statement',
-                      'mentor_evaluation_doc','presentation','work_evidence',
-                      'attendance_proof','weekly_report_pdf','other'))
-storage_key         TEXT UNIQUE NOT NULL    -- random UUID path in S3/MinIO
-original_filename   TEXT NOT NULL
-mime_type           TEXT NOT NULL
-size_bytes          INTEGER NOT NULL
-checksum            TEXT                    -- SHA-256 for integrity
-uploaded_at         TIMESTAMPTZ NOT NULL DEFAULT now()
-verified_at         TIMESTAMPTZ
-verification_status TEXT NOT NULL DEFAULT 'pending'
-                      CHECK (verification_status IN ('pending','verified','rejected'))
-rejection_reason    TEXT
-```
-
-### audit_logs
-```sql
-id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-actor_user_id   UUID REFERENCES users(id)
-action          TEXT NOT NULL
-entity_type     TEXT NOT NULL
-entity_id       UUID
-client_platform TEXT
-client_version  TEXT
-ip_address      INET
-metadata        JSONB
-created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-
-### notification_logs
-```sql
-id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
-user_id         UUID NOT NULL REFERENCES users(id)
-type            TEXT NOT NULL
-title           TEXT NOT NULL
-body            TEXT
-delivered_at    TIMESTAMPTZ
-read_at         TIMESTAMPTZ
-created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-```
-
----
-
-## 3. Recommended Indexes
+## 2. Enums
 
 ```sql
--- Core lookups
-CREATE INDEX ON students(register_number);
-CREATE INDEX ON internships(student_id, status);
-CREATE INDEX ON internships(start_date, end_date);
-CREATE INDEX ON internships(faculty_coordinator_id);
-
--- Daily operations
-CREATE INDEX ON attendance(internship_id, attendance_date);
-CREATE INDEX ON attendance(student_id, attendance_date);
-CREATE INDEX ON daily_work_logs(internship_id, work_date);
-CREATE INDEX ON weekly_reports(internship_id, week_number);
-
--- Reporting
-CREATE INDEX ON documents(owner_user_id, document_type);
-CREATE INDEX ON mentor_evaluations(internship_id);
-CREATE INDEX ON audit_logs(entity_type, entity_id);
-CREATE INDEX ON audit_logs(created_at);
-
--- Offline sync
-CREATE INDEX ON attendance(client_id);
-CREATE INDEX ON daily_work_logs(client_id);
-
--- Notifications
-CREATE INDEX ON device_tokens(user_id);
-CREATE INDEX ON notification_logs(user_id, read_at);
+CREATE TYPE "UserRole" AS ENUM ('student', 'faculty', 'admin');
+CREATE TYPE "UserStatus" AS ENUM ('active', 'suspended', 'pending');
+CREATE TYPE "ClientPlatform" AS ENUM ('ios', 'android', 'web');
+CREATE TYPE "SubmissionStatus" AS ENUM ('pending', 'approved', 'declined');
+CREATE TYPE "QuestionType" AS ENUM ('text', 'long_text', 'number', 'choice');
 ```
 
----
+## 3. Models
 
-## 4. Local Mobile Database (WatermelonDB / SQLite)
+### 3.1 User
 
-WatermelonDB mirrors a subset of the server schema for offline support.
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK, auto-generated |
+| auth_id | VARCHAR | Unique, links to Supabase auth.users.id |
+| email | VARCHAR | Unique |
+| role | UserRole | student, faculty, admin |
+| status | UserStatus | Default: active |
+| name | VARCHAR? | Display name for faculty/admin |
+| department_id | UUID? | FK → Department. Null = institution-wide |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
 
-**Local tables (mobile only):**
-- `attendance_drafts` — offline attendance records pending sync
-- `work_log_drafts` — offline work logs pending sync
-- `internship_cache` — read-only cache of approved internship
-- `weekly_report_drafts` — offline weekly report drafts
-- `sync_queue` — ordered list of pending API calls
+Indexes: `auth_id`, `(role, status)`
 
-Schema defined in `apps/mobile/lib/db/schema.ts` using WatermelonDB's `tableSchema`.
+### 3.2 Department
 
----
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| name | VARCHAR | |
+| institution | VARCHAR | Default: "Sri Manakula Vinayagar Engineering College" |
+| created_at | TIMESTAMPTZ | |
 
-## 5. Data Integrity Rules
+Unique constraint: `(name, institution)`
 
-- Attendance percentage: always computed from `COUNT(status='present') / total_working_days`; never stored as a raw number.
-- Total hours: computed from reporting/leaving time or summed from attendance records.
-- Week number: computed from `(work_date - internship.start_date) / 7` on the server; sent to mobile in attendance summary.
-- All ratings: enforced as `INTEGER BETWEEN 1 AND 5` at DB level and Zod level.
+### 3.3 Student
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| user_id | UUID | Unique FK → User (1:1) |
+| register_number | VARCHAR | Unique, stored uppercase |
+| name | VARCHAR | |
+| programme | VARCHAR | |
+| department_id | UUID? | FK → Department |
+| year | INT? | CHECK (1–5) |
+| section | VARCHAR? | |
+| student_email | VARCHAR | |
+| mobile | VARCHAR? | |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
+
+Indexes: `register_number`, `department_id`
+
+### 3.4 Question
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| prompt | TEXT | The question text |
+| help_text | TEXT? | Optional guidance |
+| type | QuestionType | Default: long_text |
+| sort_order | INT | Display order, default 0 |
+| is_active | BOOLEAN | Default: true (soft-retire) |
+| required | BOOLEAN | Default: true |
+| options | JSONB? | Choice options as string array |
+| min_length | INT? | For text validation |
+| max_length | INT? | For text validation |
+| department_id | UUID? | Null = institution-wide |
+| created_by | UUID? | FK → User |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
+
+Indexes: `(is_active, sort_order)`, `department_id`
+
+### 3.5 DailySubmission
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| student_id | UUID | FK → Student |
+| submission_date | DATE | The day being answered for |
+| status | SubmissionStatus | Default: pending |
+| submitted_at | TIMESTAMPTZ | |
+| reviewed_by | UUID? | FK → User |
+| reviewed_at | TIMESTAMPTZ? | |
+| review_note | TEXT? | Required on decline |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
+
+**Unique constraint: `(student_id, submission_date)` — one per student per day**
+
+Indexes: `(status, submission_date)`, `(student_id, submission_date)`
+
+### 3.6 Answer
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| submission_id | UUID | FK → DailySubmission (cascade delete) |
+| question_id | UUID | FK → Question (cascade delete) |
+| prompt_snapshot | TEXT | Question prompt at time of answer |
+| answer_text | TEXT | |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | |
+
+**Unique constraint: `(submission_id, question_id)` — one answer per question per submission**
+
+Index: `submission_id`
+
+### 3.7 Document
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| owner_user_id | UUID | FK → User (cascade delete) |
+| submission_id | UUID? | FK → DailySubmission. Nullable for pre-attach uploads |
+| storage_key | VARCHAR | Unique, random UUID path. Never exposed to client |
+| original_filename | VARCHAR | |
+| mime_type | VARCHAR | |
+| size_bytes | INT | |
+| checksum | VARCHAR? | SHA-256 |
+| uploaded_at | TIMESTAMPTZ | |
+| deleted_at | TIMESTAMPTZ? | Soft delete |
+
+Indexes: `owner_user_id`, `submission_id`
+
+### 3.8 AuditLog
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| actor_user_id | UUID? | FK → User. Null for unauthenticated events |
+| action | VARCHAR | Enumerated action name |
+| entity_type | VARCHAR | e.g., "submission", "question" |
+| entity_id | UUID? | |
+| client_platform | ClientPlatform? | |
+| client_version | VARCHAR? | |
+| ip_address | INET? | |
+| metadata | JSONB? | |
+| created_at | TIMESTAMPTZ | |
+
+Indexes: `(entity_type, entity_id)`, `created_at`, `actor_user_id`, `action`
+
+## 4. Key Constraints
+
+| Rule | Implementation |
+|------|----------------|
+| One submission per day per student | UNIQUE (student_id, submission_date) |
+| One answer per question per submission | UNIQUE (submission_id, question_id) |
+| Student year range | CHECK (year BETWEEN 1 AND 5) |
+| One student per user | UNIQUE (user_id) on Student |
+| One auth account per user | UNIQUE (auth_id) on User |
+
+## 5. Relationships
+
+- User 1:1 Student (via user_id)
+- User N:1 Department (staff assignment)
+- Student N:1 Department
+- Student 1:N DailySubmission
+- DailySubmission 1:N Answer
+- DailySubmission 1:N Document
+- Question 1:N Answer
+- User 1:N Document (ownership)
+- User 1:N AuditLog (actor)
+- User 1:N Question (author)
+- User 1:N DailySubmission (reviewer)
+
+## 6. Design Decisions
+
+1. **No Attendance table** — Attendance is derived from approved DailySubmissions. This eliminates any possibility of the two getting out of sync.
+
+2. **promptSnapshot on Answer** — When a question is edited or retired, past submissions still show what the student was actually asked. This is a deliberate denormalization for audit integrity.
+
+3. **Document.submissionId is nullable** — The two-phase upload flow issues a signed URL before the submission exists. The `/complete` endpoint attaches the document afterward.
+
+4. **Soft-delete for Documents** — Row is marked with `deleted_at` first, then storage object is removed. Prevents orphaned rows if storage deletion fails.
+
+5. **Questions are soft-retired** — `is_active = false` rather than DELETE. Past answers still reference the question via foreign key.
+
+6. **DATE not TIMESTAMP for submission_date** — "Which day" should never be a timezone question. The date is in the institution's timezone.

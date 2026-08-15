@@ -1,387 +1,288 @@
-# API Specification — Enhanced for Mobile App
+# 05 — API Specification
 
-> **Version 2.0** | REST JSON API consumed by React Native mobile app
+## 1. Conventions
 
----
+- Base URL: `/api`
+- Auth: Bearer token in `Authorization` header (Supabase JWT)
+- Request bodies: JSON (`Content-Type: application/json`)
+- All responses follow `{ data, error, meta }` envelope
+- Errors return `{ error: { code, message, details? } }`
+- Pagination: `?page=1&limit=20` (default limit 20, max 100)
+- Dates in responses: ISO 8601
+- UUIDs for all entity IDs
 
-## Base
+## 2. Error Codes
 
-```
-Base URL:  https://api.your-institution.edu/api
-Auth:      Bearer <access_token>  (JWT, 15-min TTL)
-Content:   application/json
-Versioning: /api/v1/ (add when breaking changes needed)
-```
+| Code | HTTP Status | Meaning |
+|------|-------------|---------|
+| VALIDATION_ERROR | 422 | Request body/params failed schema validation |
+| UNAUTHORIZED | 401 | Missing or invalid token |
+| FORBIDDEN | 403 | Authenticated but not allowed |
+| NOT_FOUND | 404 | Resource does not exist |
+| CONFLICT | 409 | Duplicate (e.g., submission already exists for today) |
+| RATE_LIMITED | 429 | Too many requests |
+| PAYLOAD_TOO_LARGE | 413 | File exceeds 10 MB |
+| UNSUPPORTED_MEDIA_TYPE | 415 | File type not allowed |
+| SERVER_ERROR | 500 | Unhandled error |
 
-All protected endpoints require `Authorization: Bearer <token>` header.
-Server validates role + ownership on every request.
-
----
-
-## Authentication
-
-```
-POST   /api/auth/login
-POST   /api/auth/refresh
-POST   /api/auth/logout
-GET    /api/auth/me
-POST   /api/auth/forgot-password
-POST   /api/auth/reset-password
-```
-
-### POST /api/auth/login
-```json
-Request:
-{
-  "email": "student@smvec.ac.in",
-  "password": "secret"
-}
-
-Response 200:
-{
-  "accessToken": "eyJ...",
-  "refreshToken": "rt_...",
-  "expiresIn": 900,
-  "user": {
-    "id": "uuid",
-    "email": "...",
-    "role": "student",
-    "name": "..."
-  }
-}
-```
-
-### POST /api/auth/refresh
-```json
-Request:  { "refreshToken": "rt_..." }
-Response: { "accessToken": "eyJ...", "expiresIn": 900 }
-```
+## 3. Endpoints (20 total)
 
 ---
 
-## Device Tokens (Push Notifications)
+### 3.1 Auth
 
-```
-POST   /api/device-tokens          — register Expo push token
-DELETE /api/device-tokens/:token   — unregister on logout
-```
+#### `GET /api/auth/me`
+Returns the authenticated user's profile.
 
-### POST /api/device-tokens
+**Response:** User object with role, status, department, and student record if applicable.
+
+#### `POST /api/auth/forgot-password`
+Triggers password reset email via Supabase.
+
+**Body:** `{ email: string }`
+
+**Response:** `{ data: { message: "Reset email sent" } }`
+
+#### `POST /api/auth/reset-password`
+Completes password reset.
+
+**Body:** `{ token: string, password: string }`
+
+---
+
+### 3.2 Dashboard
+
+#### `GET /api/dashboard`
+Role-discriminated dashboard data.
+
+**Student response:**
 ```json
 {
-  "expoPushToken": "ExponentPushToken[...]",
-  "platform": "android",
-  "appVersion": "1.2.0"
+  "role": "student",
+  "todayStatus": "pending" | "approved" | "declined" | null,
+  "attendance": { "approved": 45, "total": 60, "percentage": 75 },
+  "recentSubmissions": [...]
 }
 ```
 
----
-
-## Students
-
-```
-GET    /api/students/me
-PATCH  /api/students/me
-GET    /api/students/:id          — faculty/admin only
-GET    /api/students              — faculty/admin only (paginated)
-```
-
----
-
-## Internships
-
-```
-POST   /api/internships
-GET    /api/internships/me        — student's own internship
-GET    /api/internships/:id
-PATCH  /api/internships/:id
-POST   /api/internships/:id/submit
-POST   /api/internships/:id/approve    — faculty only
-POST   /api/internships/:id/reject     — faculty only
-```
-
-### POST /api/internships
+**Faculty/Admin response:**
 ```json
 {
-  "organisationId": "uuid-or-null",
-  "organisationName": "Iinvsys Technologies",
-  "organisationLocation": "Puducherry",
-  "mentorName": "Raj Kumar",
-  "mentorDesignation": "Senior Engineer",
-  "mentorEmail": "raj@iinvsys.com",
-  "mentorContact": "9876543210",
-  "domain": "software_development",
-  "mode": "offline",
-  "startDate": "2026-06-01",
-  "endDate": "2026-07-31",
-  "workingHoursPerDay": 8,
-  "facultyCoordinatorId": "uuid"
+  "role": "faculty",
+  "pendingReviewCount": 12,
+  "totalStudents": 48,
+  "todaySubmissionCount": 35,
+  "stats": { "approved": 180, "declined": 5, "pending": 12 }
 }
 ```
 
 ---
 
-## Attendance
+### 3.3 Departments
 
-```
-POST   /api/attendance
-GET    /api/attendance?internshipId=&from=&to=
-PATCH  /api/attendance/:id
-POST   /api/attendance/:id/verify    — mentor/faculty only
-GET    /api/attendance/summary?internshipId=
-```
+#### `GET /api/departments`
+List all departments. Any authenticated user.
 
-### POST /api/attendance
-```json
-{
-  "internshipId": "uuid",
-  "date": "2026-08-14",
-  "status": "present",
-  "reportingTime": "09:00",
-  "leavingTime": "17:30",
-  "mode": "office",
-  "leaveReason": null,
-  "proofDocumentId": null,
-  "clientId": "device-generated-uuid"    ← idempotency key for offline sync
-}
-```
+#### `POST /api/departments`
+Create a department. Admin only.
 
-### GET /api/attendance/summary
-```json
-Response:
-{
-  "totalWorkingDays": 45,
-  "daysAttended": 42,
-  "daysAbsent": 1,
-  "daysLeave": 1,
-  "holidays": 1,
-  "attendancePercentage": 93.3,
-  "totalHours": 336.0
-}
-```
+**Body:** `{ name: string }`
 
 ---
 
-## Daily Work Logs
+### 3.4 Questions
 
-```
-POST   /api/work-logs
-GET    /api/work-logs?internshipId=&from=&to=
-GET    /api/work-logs/:id
-PATCH  /api/work-logs/:id
-POST   /api/work-logs/:id/submit
-```
+#### `GET /api/questions`
+List questions. Faculty/admin: all (including inactive). Student: active only, filtered by department scope.
 
-### POST /api/work-logs
+**Query params:** `?active=true&departmentId=uuid`
+
+#### `POST /api/questions`
+Create a question. Faculty/admin only.
+
+**Body:**
 ```json
 {
-  "internshipId": "uuid",
-  "workDate": "2026-08-14",
-  "activities": "Implemented JWT refresh token rotation in the Flask API...",
-  "technologies": ["Python", "Flask", "JWT", "PostgreSQL"],
-  "taskAssigned": "Implement secure authentication",
-  "completionStatus": "yes",
-  "learning": "Learned about token rotation and secure cookie storage...",
-  "challenge": "Handling concurrent refresh token requests",
-  "solution": "Added Redis-based token locking",
-  "deliverableType": "code",
-  "evidenceDocumentId": null,
-  "mentorInteraction": true,
-  "mentorFeedback": "Good implementation, suggested adding rate limiting",
-  "clientId": "device-generated-uuid"
+  "prompt": "What did you work on today?",
+  "type": "long_text",
+  "helpText": "Describe in detail",
+  "required": true,
+  "options": null,
+  "minLength": 10,
+  "maxLength": 2000,
+  "departmentId": null
 }
 ```
+
+**Constraint:** Max 20 active questions. Returns CONFLICT if exceeded.
+
+#### `GET /api/questions/:id`
+Single question detail.
+
+#### `PATCH /api/questions/:id`
+Update question fields. Faculty/admin only.
+
+#### `DELETE /api/questions/:id`
+Soft-retire (sets `isActive = false`). Faculty/admin only.
+
+#### `PATCH /api/questions/reorder`
+Batch update sort order. Faculty/admin only.
+
+**Body:** `{ order: [{ id: "uuid", sortOrder: number }] }`
 
 ---
 
-## Batch Sync (Offline)  ← NEW
+### 3.5 Submissions
 
-```
-POST   /api/sync
-```
+#### `GET /api/submissions`
+List submissions. Student: own submissions. Faculty: department submissions. Admin: all.
 
-### POST /api/sync
-Accepts batched offline records in one request.
+**Query params:** `?status=pending&page=1&limit=20&studentId=uuid&from=date&to=date`
 
+#### `POST /api/submissions`
+Submit answers for today.
+
+**Body:**
 ```json
-Request:
 {
-  "attendance": [
-    { "clientId": "uuid1", ...attendance fields... },
-    { "clientId": "uuid2", ...attendance fields... }
-  ],
-  "workLogs": [
-    { "clientId": "uuid3", ...work log fields... }
-  ]
-}
-
-Response 200:
-{
-  "attendance": [
-    { "clientId": "uuid1", "serverId": "uuid-a", "status": "created" },
-    { "clientId": "uuid2", "serverId": null, "status": "duplicate", "existingId": "uuid-b" }
-  ],
-  "workLogs": [
-    { "clientId": "uuid3", "serverId": "uuid-c", "status": "created" }
+  "answers": [
+    { "questionId": "uuid", "answerText": "My work today..." }
   ]
 }
 ```
 
-Possible statuses: `created`, `updated`, `duplicate`, `error`.
+**Rules:**
+- One per student per day (CONFLICT on duplicate)
+- If existing submission is pending or declined: answers replaced, status reset to pending
+- If approved: returns FORBIDDEN
+- Answer length: 10–2000 characters
+- Back-dating not allowed
 
----
+#### `GET /api/submissions/today`
+Returns today's active questions + existing submission if present. Student only.
 
-## Weekly Reports
-
-```
-POST   /api/weekly-reports
-GET    /api/weekly-reports?internshipId=
-GET    /api/weekly-reports/:id
-PATCH  /api/weekly-reports/:id
-POST   /api/weekly-reports/:id/submit
-GET    /api/weekly-reports/current?internshipId=    ← returns current week number + pre-aggregated hours
-```
-
-### GET /api/weekly-reports/current
+**Response:**
 ```json
-Response:
 {
-  "weekNumber": 5,
-  "weekStartDate": "2026-08-10",
-  "weekEndDate": "2026-08-16",
-  "daysAttended": 4,
-  "totalHours": 32.5,
-  "reportExists": false
+  "questions": [...],
+  "submission": { ... } | null
+}
+```
+
+#### `GET /api/submissions/:id`
+Submission detail with answers and documents.
+
+#### `DELETE /api/submissions/:id`
+Delete own pending submission. Student only (pending status only).
+
+#### `POST /api/submissions/:id/review`
+Review a single submission. Faculty/admin only.
+
+**Body:**
+```json
+{
+  "decision": "approved" | "declined",
+  "reviewNote": "Please add more detail about..."
+}
+```
+
+**Rules:** `reviewNote` required for decline (min 5 chars).
+
+#### `POST /api/submissions/review`
+Bulk review. Faculty/admin only.
+
+**Body:**
+```json
+{
+  "submissionIds": ["uuid", "uuid"],
+  "decision": "approved" | "declined",
+  "reviewNote": "..."
 }
 ```
 
 ---
 
-## Final Assessment
+### 3.6 Students
 
-```
-POST   /api/final-assessment
-GET    /api/final-assessment?internshipId=
-PATCH  /api/final-assessment/:id
-POST   /api/final-assessment/:id/submit
-POST   /api/final-assessment/:id/unlock    — faculty only (early access)
-```
+#### `GET /api/students`
+List students. Faculty: own department. Admin: all.
 
----
+**Query params:** `?search=name&departmentId=uuid&page=1&limit=20`
 
-## Mentor Evaluation
+#### `GET /api/students/me`
+Current student's profile.
 
-```
-GET    /api/mentor/students
-POST   /api/mentor-evaluations
-GET    /api/mentor-evaluations/:internshipId
-PATCH  /api/mentor-evaluations/:id
-POST   /api/mentor-evaluations/:id/submit
-GET    /api/mentor/invite/:token            — public; validates invite token
-```
+#### `PATCH /api/students/me`
+Update own profile.
 
----
+**Body:** `{ mobile?: string, section?: string, year?: number }`
 
-## Documents
+#### `GET /api/students/:id`
+Student detail with attendance summary and submission history. Faculty/admin only.
 
-```
-POST   /api/documents/upload-url         — returns presigned PUT URL
-POST   /api/documents/complete           — confirm upload complete
-GET    /api/documents/:id                — returns presigned GET URL (redirect)
-DELETE /api/documents/:id
-POST   /api/documents/:id/verify         — faculty only
-POST   /api/documents/:id/reject         — faculty only
-GET    /api/documents?internshipId=&type=
-```
-
-### POST /api/documents/upload-url
-```json
-Request:  { "filename": "offer_letter.pdf", "mimeType": "application/pdf", "sizeBytes": 524288, "documentType": "offer_letter" }
-Response: { "uploadUrl": "https://...", "storageKey": "uuid/...", "expiresIn": 300 }
-```
-
----
-
-## Reports
-
-```
-GET    /api/reports/student/:studentId           — full student evidence summary
-GET    /api/reports/attendance?internshipId=
-GET    /api/reports/weekly-progress?internshipId=
-GET    /api/reports/mentor-evaluation?internshipId=
-GET    /api/reports/evidence?internshipId=
-POST   /api/reports/export                       — async; returns job ID
-GET    /api/reports/export/:jobId                — poll job status / download URL
-```
-
----
-
-## Notifications
-
-```
-GET    /api/notifications              — list for current user
-PATCH  /api/notifications/:id/read
-PATCH  /api/notifications/read-all
-```
-
----
-
-## Standard Response Shapes
-
-### Success (single resource)
-```json
-{ "data": { ... } }
-```
-
-### Success (list)
+**Response:**
 ```json
 {
-  "data": [ ... ],
-  "pagination": { "page": 1, "pageSize": 20, "total": 143, "totalPages": 8 }
+  "student": { ... },
+  "summary": { "totalDays": 60, "approved": 45, "declined": 3, "pending": 2 },
+  "recentSubmissions": [...]
 }
 ```
 
-### Error
+---
+
+### 3.7 Documents
+
+#### `GET /api/documents`
+List unattached documents (uploaded but not yet linked to a submission). Owner only.
+
+#### `POST /api/documents/upload-url`
+Request a signed upload URL.
+
+**Body:** `{ filename: string, mimeType: string, sizeBytes: number }`
+
+**Validations:**
+- Allowed MIME types: application/pdf, image/jpeg, image/png, image/heic
+- Max size: 10 MB (10,485,760 bytes)
+
+**Response:**
 ```json
 {
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "Invalid request",
-    "fields": {
-      "startDate": "Start date is required",
-      "workingHoursPerDay": "Must be a positive number"
-    }
-  }
+  "documentId": "uuid",
+  "uploadUrl": "https://...",
+  "expiresAt": "2025-01-01T00:10:00Z"
 }
 ```
 
-### Common error codes
-| Code | HTTP | Meaning |
-|---|---|---|
-| `UNAUTHORIZED` | 401 | Missing or invalid token |
-| `FORBIDDEN` | 403 | Valid token, insufficient permission |
-| `NOT_FOUND` | 404 | Resource does not exist |
-| `CONFLICT` | 409 | Duplicate record (same date) |
-| `VALIDATION_ERROR` | 422 | Request body failed validation |
-| `RATE_LIMITED` | 429 | Too many requests |
-| `SERVER_ERROR` | 500 | Unexpected internal error |
+#### `POST /api/documents/complete`
+Confirm upload and attach to a submission.
+
+**Body:** `{ documentId: string, submissionId: string }`
+
+**Constraint:** Max 5 documents per submission.
+
+#### `GET /api/documents/:id`
+Returns signed download URL. Owner or reviewer of the submission.
+
+#### `DELETE /api/documents/:id`
+Soft-delete document. Owner only.
 
 ---
 
-## Authorization Matrix
+## 4. Authorization Summary
 
-| Endpoint group | Student | Mentor | Faculty | Admin |
-|---|---|---|---|---|
-| `/api/students/me` | RW | — | — | — |
-| `/api/students/:id` | — | — | R | RW |
-| `/api/internships/me` | RW | — | — | — |
-| `/api/internships/:id` | R own | R assigned | RW scoped | RW |
-| `/api/attendance` | RW own | R/Verify assigned | RW scoped | RW |
-| `/api/work-logs` | RW own | R assigned | RW scoped | RW |
-| `/api/weekly-reports` | RW own | R assigned | RW scoped | RW |
-| `/api/final-assessment` | RW own | — | R/Unlock | RW |
-| `/api/mentor-evaluations` | R own | RW assigned | R scoped | RW |
-| `/api/documents` | RW own | R assigned | RW scoped | RW |
-| `/api/reports` | Own | Assigned | Scoped | All |
-| `/api/sync` | W own | — | — | — |
-| `/api/device-tokens` | RW own | RW own | RW own | RW |
+| Endpoint | Student | Faculty | Admin |
+|----------|---------|---------|-------|
+| auth/* | ✓ | ✓ | ✓ |
+| dashboard | ✓ (own) | ✓ (dept) | ✓ (all) |
+| departments GET | ✓ | ✓ | ✓ |
+| departments POST | ✗ | ✗ | ✓ |
+| questions GET | ✓ (active) | ✓ (all) | ✓ (all) |
+| questions CUD | ✗ | ✓ (dept) | ✓ (all) |
+| submissions GET | ✓ (own) | ✓ (dept) | ✓ (all) |
+| submissions POST | ✓ | ✗ | ✗ |
+| submissions review | ✗ | ✓ (dept) | ✓ (all) |
+| students list | ✗ | ✓ (dept) | ✓ (all) |
+| students/me | ✓ | ✗ | ✗ |
+| students/:id | ✗ | ✓ (dept) | ✓ (all) |
+| documents | ✓ (own) | ✓ (via review) | ✓ (via review) |

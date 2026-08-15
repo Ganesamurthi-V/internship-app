@@ -1,163 +1,168 @@
-# Security, Privacy & Compliance Baseline — Mobile App Enhanced
+# 07 — Security and Privacy
 
-> **Version 2.0** | Additional mobile-specific security controls
+## 1. Authentication
 
----
+### 1.1 Identity Provider
+- Supabase Auth handles user registration, login, and password management
+- Email + password authentication
+- Password reset via Supabase's transactional email
 
-## 1. Data Classification
+### 1.2 Token Verification
+- Supabase issues JWTs signed with the project's JWT secret
+- Backend verifies tokens locally using the `jose` library and Supabase's JWKS endpoint
+- No network call to Supabase per request (JWKS cached)
+- LRU cache maps verified `auth_id` → User record to avoid per-request DB lookups
 
-### Sensitive (highest protection)
-- Student contact details (email, mobile)
-- Academic identifiers (register number, programme, section)
-- Internship documents (offer letters, certificates)
-- Mentor contact details
-- Attendance records
-- Evaluation records (mentor ratings, self-ratings)
+### 1.3 Token Lifecycle
+- Access token: 1 hour (Supabase default)
+- Refresh token: managed by Supabase client SDK
+- Mobile client refreshes automatically on 401
 
-### Potentially Confidential (organisational)
-- Work evidence (screenshots, deliverables)
-- Project reports
-- Organisation-provided documents
+### 1.4 Current Limitation
+- Tokens are stored in memory (Zustand store), not in Keychain/Keystore
+- Session is lost when the app is killed (but survives hot reload)
+- Production deployment should use expo-secure-store with chunked storage
 
-### Source guide rule
-> Do not collect confidential company information or proprietary source code. Any uploaded evidence must be organisation-permitted.
+## 2. Authorization
 
----
+### 2.1 Role-Based Access Control
+Three roles with escalating data scope:
+- **Student** — access to own data only
+- **Faculty** — access to own department's data
+- **Admin** — access to all data (institution-wide)
 
-## 2. Access Control Matrix
+### 2.2 Scope Enforcement
+- Faculty scope is determined by `user.departmentId`
+- Faculty with null department sees nothing (fails closed)
+- Every query filters by department scope for faculty
+- Admin bypasses department filter
 
-| Resource | Student | Mentor | Faculty | Admin |
-|---|---|---|---|---|
-| Own profile | RW | — | R | RW |
-| Own internship | RW | R | RW | RW |
-| Own attendance | RW | R/Verify | RW | RW |
-| Own work log | RW | R/Review | RW | RW |
-| Own weekly report | RW | R | RW | RW |
-| Mentor evaluation | R | RW own | R | RW |
-| Documents | RW own | R assigned | RW scoped | RW |
-| Reports | Own | Assigned | Scoped | All |
-| Audit logs | — | — | R scoped | R |
-| Device tokens | Own | Own | Own | RW |
-| Push notifications | Own | Own | Own | All |
+### 2.3 Authorization Matrix
 
-**All authorization enforced server-side.** UI hiding is cosmetic only; API always validates.
+| Action | Who |
+|--------|-----|
+| Submit answers | Student (owner only) |
+| Edit own submission | Student (pending/declined only) |
+| Review submission | Faculty (same dept) + Admin |
+| Create/edit/retire question | Faculty (same dept) + Admin |
+| Edit student profile | Student (self) + Admin |
+| Upload/delete documents | Student (owner only) |
+| View documents | Owner + reviewer of parent submission |
+| Create department | Admin only |
 
----
+### 2.4 Immutability Rules
+- Faculty cannot edit student answers (enforced at authorization layer)
+- Approved submissions cannot be modified by anyone
+- promptSnapshot on answers is write-once
 
-## 3. Mobile-Specific Security
+## 3. Data Protection
 
-### 3.1 Token Storage
-- Access token and refresh token stored in **`expo-secure-store`** (iOS Keychain / Android Keystore).
-- Never stored in AsyncStorage (plaintext) or Redux/Zustand without secure-store backing.
-- Tokens wiped on logout and on uninstall (Keychain) / app data clear (Keystore).
+### 3.1 Data at Rest
+- PostgreSQL on Supabase (encrypted at rest by Supabase infrastructure)
+- File storage in private Supabase Storage bucket (encrypted at rest)
+- No sensitive data stored locally on device (no offline database)
 
-### 3.2 Biometric / App Lock
-- Optional biometric lock (Face ID / Touch ID / fingerprint) for app re-entry.
-- App does not re-send credentials; biometric success unlocks locally stored token only.
-- Falls back to device PIN/password if biometrics unavailable.
+### 3.2 Data in Transit
+- All API calls over HTTPS (TLS 1.2+)
+- Signed upload/download URLs for direct storage access
+- No sensitive data in URL query parameters
 
-### 3.3 Network Security
-- All API calls over HTTPS/TLS 1.2+.
-- Certificate pinning (optional, high-security deployments): pin to institution domain certificate.
-- `expo-build-properties` with `NSAllowsArbitraryLoads: false` (iOS) to block plain HTTP.
-- Android `network_security_config.xml` set to `cleartextTrafficPermitted: false`.
+### 3.3 Storage Key Design
+- Document storage keys are random UUIDs
+- Never derived from student name, register number, or filename
+- Storage key excluded from all API responses (server-only field)
+- Prevents enumeration attacks on the storage bucket
 
-### 3.4 Offline Data Security
-- WatermelonDB/SQLite database encrypted using SQLCipher (via `@nozbe/watermelondb` with encryption plugin).
-- Encryption key derived from user credentials + device key; not hardcoded.
-- Offline queue does not store passwords, tokens, or raw document bytes longer than needed for upload.
+### 3.4 Soft Delete
+- Documents: `deleted_at` timestamp set, then storage object removed
+- Questions: `is_active = false` (never hard-deleted)
+- Prevents orphaned references
 
-### 3.5 Jailbreak/Root Detection (Optional)
-- Use `expo-device` checks or a dedicated library for high-security deployments.
-- If jailbreak/root detected: warn user, optionally restrict document download to on-device only.
+## 4. Row-Level Security
 
-### 3.6 Screenshot Prevention (Optional)
-- Android: `FLAG_SECURE` via `expo-screen-capture` disables screenshot on sensitive screens (student profile, mentor evaluation).
-- iOS: screen recording detection; blur overlay when app enters background.
+### 4.1 Defense in Depth
+- RLS enabled on all tables in Supabase
+- No permissive policies defined (deny-all by default)
+- Application connects as `postgres` role (BYPASSRLS)
+- Authorization enforced in application code
 
----
+### 4.2 Purpose
+Supabase exposes a public REST API via the `anon` key. Without RLS, that key could read all tables. RLS with no permissive policies means the auto-generated REST endpoint returns nothing for any table, even if the anon key is compromised.
 
-## 4. File Security
+## 5. Input Validation
 
-- Private S3/MinIO bucket — no public access.
-- Upload: presigned PUT URL (5-min TTL); client uploads directly — no file bytes pass through API server.
-- Download: presigned GET URL (15-min TTL) returned by API — never expose raw storage credentials.
-- File types allowed: PDF, JPG, PNG, HEIC only.
-- File size limit: 10 MB per file.
-- Storage key: random UUID — not derived from filename or student ID.
-- MIME type validated on both client (before upload request) and server (before generating presigned URL).
-- HEIC converted to JPEG client-side before upload.
-- Optional: run uploaded files through antivirus/malware scan on server-side arrival.
-- Never execute uploaded files.
-- Deleted document: storage key marked `deleted`; S3 object deleted asynchronously; presigned URLs for that key will 404.
+### 5.1 Schema Validation
+- All request bodies validated with Zod schemas (shared package)
+- Type coercion and sanitization at parse boundary
+- Invalid requests rejected with 422 + field-level error details
 
----
+### 5.2 Limits
 
-## 5. Authentication Security
+| Parameter | Value |
+|-----------|-------|
+| Answer min length | 10 chars |
+| Answer max length | 2,000 chars |
+| Review note min length | 5 chars |
+| Max active questions | 20 |
+| Max files per submission | 5 |
+| Max file size | 10 MB |
+| Allowed file types | PDF, JPG, PNG, HEIC |
 
-- Password minimum: 8 characters, at least 1 uppercase, 1 number.
-- bcrypt hashing with cost factor ≥ 12 (or argon2id).
-- Login rate limit: 10 attempts per 15 minutes per IP + per email.
-- Account lockout after 10 failed attempts; unlock via email.
-- Refresh token rotation: every refresh issues a new refresh token; old one revoked.
-- Token family invalidation on theft detection (refresh token reuse = compromise signal → revoke all sessions).
-- Password reset: time-limited token (1 hour) sent to verified email only.
-- MFA available for faculty and admin roles.
+### 5.3 File Validation
+- MIME type checked against allowlist before issuing upload URL
+- File size checked before issuing upload URL
+- Content-type verified at storage level
 
----
+## 6. Rate Limiting
 
-## 6. API Security
+### 6.1 Implementation
+- In-process rate limiter (`src/lib/rateLimit.ts`)
+- Per-user and per-IP sliding windows
+- Returns 429 with `Retry-After` header
 
-- Every request: validate schema (Zod), check authentication (JWT), check authorization (role + ownership).
-- Never trust `userId`, `studentId`, `role` fields supplied by client — always derive from JWT subject.
-- Parameterized queries via Prisma (no raw string concatenation in SQL).
-- Rate limits:
-  - Auth endpoints: 10/min per IP
-  - Upload URL generation: 30/min per user
-  - Report export: 5/min per user
-  - General API: 200/min per user
-- CORS: allow only app's registered origins; React Native uses `expo://` deep link origin.
-- Input sanitization: strip control characters from free-text fields.
-- Sensitive fields (password_hash, storage_key) never returned in API responses.
+### 6.2 Current Limitation
+- In-memory counters (per-instance)
+- Correct for single-instance deployment
+- Multi-instance: implement `RateLimitStore` interface backed by Redis
 
----
+### 6.3 Auth Rate Limiting
+- Login attempts throttled by Supabase Auth (server-side)
+- No `failed_login_attempts` column in app database
 
-## 7. Push Notification Security
+## 7. Audit Trail
 
-- Expo push tokens are user-specific and device-specific.
-- Notification payload: never include sensitive data in the notification body (only "You have a pending submission" — not student name or record details).
-- Full data fetched on app open via authenticated API.
-- Tokens revoked on logout: `DELETE /api/device-tokens/:token`.
+### 7.1 AuditLog Table
+Every security-relevant action is logged:
+- Login success/failure
+- Submission CRUD
+- Review decisions
+- Question management
+- Document upload/delete/download
+- Profile changes
+- User status changes
 
----
+### 7.2 Audit Fields
+- Actor user ID (nullable for unauthenticated events)
+- Action name (enumerated, not free text)
+- Entity type + ID
+- Client platform (ios/android/web)
+- Client version
+- IP address
+- Arbitrary metadata (JSONB)
 
 ## 8. Privacy
 
-- Collect only fields required by the internship process (source guide-aligned).
-- Each role sees only the minimum necessary personal information.
-- Faculty sees student name/register number — not mobile number unless needed.
-- Mentor sees only assigned students.
-- Define retention/deletion policy with the institution before go-live.
-- Students may not request their own data deletion during an active internship (NBA evidence requirement).
-- After internship period, data retention is institution-defined (recommend 5 years for NBA purposes).
-- Do not expose student information through public URLs or unauthenticated endpoints.
+### 8.1 Data Minimization
+- Only collect data necessary for the daily submission workflow
+- No tracking beyond audit logging
+- No analytics SDKs
 
----
+### 8.2 Access Control
+- Students see only their own data
+- Faculty see only their department
+- API never exposes one student's data to another student
 
-## 9. Audit Events
-
-All of the following must produce an `audit_logs` record:
-
-| Event | Sensitivity |
-|---|---|
-| Login (success + failure) | Medium |
-| Role change | High |
-| Internship approval/rejection | High |
-| Attendance edit (post-submission) | Medium |
-| Mentor evaluation submit/edit | High |
-| Document verification/rejection | Medium |
-| Final assessment reopening | High |
-| Report export | Medium |
-| Document delete | High |
-| Admin settings change | High |
-| Refresh token reuse (theft signal) | Critical |
+### 8.3 File Privacy
+- All files in a private bucket (no public URLs)
+- Download requires authentication + authorization check
+- Signed URLs are time-limited

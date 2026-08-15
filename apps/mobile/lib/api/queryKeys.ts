@@ -1,11 +1,9 @@
 /**
- * React Query keys — 12_Mobile_App_Spec §4.
+ * React Query keys.
  *
- * Transcribed from the specification, with a few additions for endpoints the app needs
- * that the original list did not cover (dashboard, documents, notifications).
- *
- * `as const` throughout so each key is a readonly tuple, which is what lets
- * `invalidateQueries` match by prefix reliably.
+ * `as const` throughout, so each key is a readonly tuple. That is what lets
+ * `invalidateQueries` match by prefix reliably — invalidating `['submissions']`
+ * catches every submission list and detail without naming them.
  */
 
 export const queryKeys = {
@@ -15,40 +13,34 @@ export const queryKeys = {
 
   dashboard: ['dashboard'] as const,
 
-  student: {
-    me: ['student', 'me'] as const,
-    internship: (studentId: string) => ['internship', studentId] as const,
-    myInternship: ['internship', 'me'] as const,
-    attendance: (internshipId: string, from: string, to: string) =>
-      ['attendance', internshipId, from, to] as const,
-    attendanceAll: (internshipId: string) => ['attendance', internshipId] as const,
-    attendanceSummary: (internshipId: string) =>
-      ['attendance', 'summary', internshipId] as const,
-    workLog: (internshipId: string, date: string) => ['work-log', internshipId, date] as const,
-    workLogs: (internshipId: string) => ['work-log', internshipId] as const,
-    weeklyReports: (internshipId: string) => ['weekly-reports', internshipId] as const,
-    currentWeek: (internshipId: string) => ['weekly-reports', 'current', internshipId] as const,
-    finalAssessment: (internshipId: string) => ['final-assessment', internshipId] as const,
-    documents: (internshipId: string) => ['documents', internshipId] as const,
+  questions: {
+    all: ['questions'] as const,
+    list: (activeOnly: boolean) => ['questions', 'list', activeOnly] as const,
+    detail: (questionId: string) => ['questions', questionId] as const,
   },
 
-  faculty: {
-    students: (filters: object) => ['faculty', 'students', filters] as const,
-    student: (studentId: string) => ['faculty', 'student', studentId] as const,
-    evidence: (internshipId: string) => ['faculty', 'evidence', internshipId] as const,
-    analytics: (filters: object) => ['faculty', 'analytics', filters] as const,
+  submissions: {
+    all: ['submissions'] as const,
+    /** The student's daily form for a given date. */
+    today: (date: string) => ['submissions', 'today', date] as const,
+    list: (filters: object) => ['submissions', 'list', filters] as const,
+    detail: (submissionId: string) => ['submissions', submissionId] as const,
+    history: ['submissions', 'history'] as const,
   },
 
-  mentor: {
-    students: ['mentor', 'students'] as const,
-    evaluation: (internshipId: string) => ['mentor', 'evaluation', internshipId] as const,
+  students: {
+    all: ['students'] as const,
+    me: ['students', 'me'] as const,
+    list: (filters: object) => ['students', 'list', filters] as const,
+    detail: (studentId: string) => ['students', studentId] as const,
+  },
+
+  documents: {
+    /** Files uploaded but not yet attached to a submission. */
+    unattached: ['documents', 'unattached'] as const,
   },
 
   reference: {
     departments: ['reference', 'departments'] as const,
-    organisations: (search?: string) => ['reference', 'organisations', search ?? ''] as const,
-    facultyCoordinators: ['reference', 'faculty-coordinators'] as const,
   },
-
-  notifications: (unreadOnly: boolean) => ['notifications', unreadOnly] as const,
 } as const;

@@ -42,13 +42,6 @@ export const colors = {
   info: '#1c5f8a',
   infoBg: '#e7f1f8',
 
-  /** Attendance calendar heatmap. */
-  present: '#1b7a44',
-  absent: '#b3261e',
-  leave: '#8a5a00',
-  holiday: '#8b97a3',
-  weeklyOff: '#c8d0d8',
-  empty: '#eef1f5',
 } as const;
 
 export const spacing = {

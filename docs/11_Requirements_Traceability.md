@@ -1,63 +1,79 @@
-# Requirements Traceability Matrix — Enhanced
+# 11 — Requirements Traceability
 
-> **Version 2.0** | Original source → Features → Technical docs → Mobile screens
+## 1. Functional Requirements → Implementation
 
----
+| ID | Requirement | API Endpoint | Database | Mobile Screen | Status |
+|----|-------------|-------------|----------|---------------|--------|
+| FR-01 | Student login | POST (Supabase Auth) | User | (auth)/login | Done |
+| FR-02 | Forgot password | /api/auth/forgot-password | — | (auth)/forgot-password | Done |
+| FR-03 | Role-based routing | /api/auth/me | User.role | _layout.tsx (root) | Done |
+| FR-04 | Student dashboard | /api/dashboard | DailySubmission | (student)/dashboard | Done |
+| FR-05 | View today's questions | /api/submissions/today | Question | (student)/answer | Done |
+| FR-06 | Submit daily answers | POST /api/submissions | DailySubmission, Answer | (student)/answer | Done |
+| FR-07 | Attach documents | /api/documents/* | Document | (student)/answer | Done |
+| FR-08 | View submission history | GET /api/submissions | DailySubmission | (student)/history | Done |
+| FR-09 | Edit pending submission | POST /api/submissions | Answer (replace) | (student)/answer | Done |
+| FR-10 | Resubmit after decline | POST /api/submissions | DailySubmission.status | (student)/answer | Done |
+| FR-11 | View own profile | GET /api/students/me | Student | (student)/profile | Done |
+| FR-12 | Edit own profile | PATCH /api/students/me | Student | (student)/profile | Done |
+| FR-13 | Faculty dashboard | /api/dashboard | DailySubmission | (faculty)/dashboard | Done |
+| FR-14 | Review queue | GET /api/submissions | DailySubmission | (faculty)/review/index | Done |
+| FR-15 | Approve submission | POST /api/submissions/:id/review | DailySubmission | (faculty)/review/[id] | Done |
+| FR-16 | Decline submission | POST /api/submissions/:id/review | DailySubmission | (faculty)/review/[id] | Done |
+| FR-17 | Bulk review | POST /api/submissions/review | DailySubmission | (faculty)/review/index | Done |
+| FR-18 | View students | GET /api/students | Student | (faculty)/students/index | Done |
+| FR-19 | Student detail | GET /api/students/:id | Student, DailySubmission | (faculty)/students/[id] | Done |
+| FR-20 | Create question | POST /api/questions | Question | (faculty)/questions | Done |
+| FR-21 | Edit question | PATCH /api/questions/:id | Question | (faculty)/questions | Done |
+| FR-22 | Retire question | DELETE /api/questions/:id | Question.isActive | (faculty)/questions | Done |
+| FR-23 | Reorder questions | PATCH /api/questions/reorder | Question.sortOrder | (faculty)/questions | Done |
+| FR-24 | Create department | POST /api/departments | Department | — (API only) | Done |
+| FR-25 | Attendance = approved | — (derived) | DailySubmission.status | dashboard cards | Done |
 
-## Full Traceability Table
+## 2. Non-Functional Requirements → Implementation
 
-| Source Section | Feature | PRD | SRS | DB Table(s) | API Endpoint(s) | Mobile Screen(s) | Test Coverage |
-|---|---|---|---|---|---|---|---|
-| Section 1 | Internship registration | §4.1 | §1.2 | `internships`, `organisations`, `mentors` | POST /api/internships | `(student)/internship/register` (3-step wizard) | E2E #1, Integration |
-| Section 1 | Document upload (offer, joining) | §4.1, §4.8 | §1.2 | `documents` | POST /api/documents/upload-url | Upload flow in registration wizard | File upload tests |
-| Section 2 | Daily attendance | §4.2 | §2.2, §3 | `attendance` | POST /api/attendance | `(student)/attendance/today` | E2E #3, Offline #1 |
-| Section 2 | Attendance proof (optional) | §4.2 | §2.2 | `attendance.proof_document_id` | POST /api/documents | Camera/picker in attendance screen | File tests |
-| Section 2 | Mentor attendance verification | §4.2 | §1.4 | `attendance.mentor_verified` | POST /api/attendance/:id/verify | `(mentor)/students/[id]/attendance` | E2E #7 |
-| Section 3 | Daily work log | §4.3 | §2.3, §3 | `daily_work_logs` | POST /api/work-logs | `(student)/work-log/today` | E2E #5, Offline #2 |
-| Section 3 | Word count enforcement | §4.3 | §3 | — (app + Zod) | Zod validation | Live counter in textarea | Unit tests |
-| Section 4 | Weekly report | §4.4 | §2.4 | `weekly_reports` | POST /api/weekly-reports | `(student)/weekly-report/[weekNumber]` | E2E #6 |
-| Section 4 | Auto-aggregate attendance | §4.4 | §2.4 | `attendance` → computed | GET /api/weekly-reports/current | Pre-populated fields (read-only) | Integration |
-| Section 5 | Skill self-rating 1–5 | §4.6 | §2.5 | `skill_ratings` | POST /api/final-assessment | `(student)/final-assessment/skill-ratings` | Unit, E2E #9 |
-| Section 6 | Post-internship assessment | §4.5 | §2.5 | `final_assessments` | POST/PATCH /api/final-assessment | `(student)/final-assessment/index` | E2E #9 |
-| Section 7 | Final documents upload | §4.8 | §1.2 | `documents` | POST /api/documents | Checklist screen in final assessment | File tests |
-| Section 8 | Mentor evaluation (10 ratings) | §4.7 | §2.6 | `mentor_evaluations` | POST /api/mentor-evaluations | `(mentor)/evaluation/[internshipId]` | E2E #8 |
-| NBA evidence | Evidence package export | §6 (PRD) | §7 | All tables | POST /api/reports/export | Faculty evidence export button | E2E #10 |
-| NBA evidence | Attendance % + hours | §6 (PRD) | §7 | `attendance` computed | GET /api/attendance/summary | Dashboard ring chart | Integration |
-| NBA evidence | Aggregate report (A–F) | §6 (PRD) | §7 | All tables | GET /api/reports/evidence | Faculty export → PDF | E2E #10 |
+| ID | Requirement | Implementation | Verification |
+|----|-------------|---------------|--------------|
+| NF-01 | Answer 10–2000 chars | Zod schema (shared-validation) | Unit test |
+| NF-02 | Review note ≥ 5 chars | Zod schema + API check | Unit test |
+| NF-03 | Max 20 active questions | Business logic check + 409 | Unit test |
+| NF-04 | Max 5 files per submission | Business logic check + 409 | Unit test |
+| NF-05 | Max 10 MB per file | Upload URL validation + 413 | Unit test |
+| NF-06 | One submission per day | UNIQUE constraint + 409 | DB + unit test |
+| NF-07 | Today only (no backdate) | Server-side date check | Unit test |
+| NF-08 | Department scope for faculty | Query filter + fails closed | Unit test |
+| NF-09 | Approved is immutable | Status check before edit | Unit test |
+| NF-10 | JWT verification | jose + JWKS | Unit test |
+| NF-11 | Rate limiting | In-process sliding window | Manual test |
+| NF-12 | Audit logging | AuditLog table | Code review |
+| NF-13 | RLS enabled | Migration 3 | Supabase dashboard |
+| NF-14 | Private storage bucket | Supabase config | Manual verify |
+| NF-15 | Prompt snapshot | Write-once on Answer.promptSnapshot | Unit test |
 
----
+## 3. Business Rules → Enforcement
 
-## Mobile-Specific Features Traceability
+| Rule | Enforcement Point | Fail Behaviour |
+|------|-------------------|----------------|
+| One submission per student per day | DB UNIQUE constraint + app check | 409 CONFLICT |
+| Faculty scoped to department | Authorization middleware | 403 FORBIDDEN or empty result |
+| Admin = institution-wide scope | No department filter applied | Full data access |
+| Cannot backdate submissions | Server compares date to today | 422 VALIDATION_ERROR |
+| Approved submissions locked | Status check before mutation | 403 FORBIDDEN |
+| Declined allows resubmit | Status check allows pending reset | Success (answers replaced) |
+| Question soft-retire | isActive = false (not DELETE) | Past answers intact |
+| promptSnapshot immutability | Written once at submission time | Cannot update |
+| Faculty cannot edit answers | Authorization: write = owner only | 403 FORBIDDEN |
+| Document limit per submission | Count check before attach | 409 CONFLICT |
 
-| Requirement | Source | PRD | Tech Spec | Mobile Implementation |
-|---|---|---|---|---|
-| Single codebase iOS + Android | Client brief | §1, §6 | §2 (React Native/Expo) | `apps/mobile/` — one codebase |
-| Offline attendance submission | SRS §5 | §5.1 | §5 (Offline Sync) | WatermelonDB + sync queue |
-| Offline work log submission | SRS §5 | §5.1 | §5 | WatermelonDB + sync queue |
-| Push: missing submission reminder | SRS §4 | §5.2 | §3.4 | expo-notifications + FCM/APNs |
-| Push: weekly report reminder | SRS §4 | §5.2 | §3.4 | Sunday 6 PM scheduled job |
-| Push: final assessment reminder | SRS §4 | §5.2 | §3.4 | 3 days before end date |
-| Camera document scan | PRD §5.3 | §5.3 | §2.1 | expo-camera + expo-image-manipulator |
-| File picker (existing PDF) | PRD §5.3 | §5.3 | §2.1 | expo-document-picker |
-| Biometric / app lock | PRD §5.4 | §5.4 | §3.1 | expo-local-authentication |
-| Secure token storage | SRS §1.1 | §5.4 | §3.1 | expo-secure-store (Keychain/Keystore) |
-| EAS Build (iOS + Android CI/CD) | Engineering | §2 (TechSpec) | §9 | eas.json profiles |
-| OTA updates (no store review) | Engineering | §2 (TechSpec) | §9 | eas update --branch production |
+## 4. Security Requirements → Controls
 
----
-
-## Coverage Summary
-
-| Document | v1.0 Status | v2.0 Enhancement |
-|---|---|---|
-| 01_PRD.md | Web-only scope | Mobile-first; offline; push; camera |
-| 02_SRS.md | Web requirements | Mobile OS, biometrics, offline rules, push channels |
-| 03_TechSpec.md | Next.js web stack | React Native/Expo full stack; WatermelonDB; EAS |
-| 04_Database_Design.md | PostgreSQL only | + device_tokens, user_sessions, notification_logs; mobile SQLite schema |
-| 05_API_Spec.md | REST basics | + /api/sync (batch offline), /api/device-tokens, /api/weekly-reports/current |
-| 06_App_Flow.md | Screen flows (web) | Mobile screen map; offline banner; step-by-step wizard flows |
-| 07_Security_and_Privacy.md | Server security | + mobile token storage, cert pinning, SQLite encryption, biometrics |
-| 08_Implementation_Plan.md | Phase list | Mobile milestones; EAS build; Maestro E2E; ~14-week timeline |
-| 09_Test_Plan.md | API/unit tests | + device tests, offline tests, accessibility, Maestro E2E |
-| 10_Project_Setup_README.md | Next.js setup | Monorepo; Expo setup; EAS build/submit commands; first milestone |
-| 11_Requirements_Traceability.md | Basic matrix | Full traceability to mobile screens + mobile-specific features |
+| Threat | Control | Layer |
+|--------|---------|-------|
+| Unauthorized access | JWT verification + role check | API middleware |
+| Cross-department data leak | Department scope filter | Business logic |
+| Storage enumeration | Random UUID keys, private bucket | Storage design |
+| Orphan files | Two-phase upload, soft-delete | Application logic |
+| History falsification | promptSnapshot, approved = locked | Database design |
+| Anon key data access | RLS with no permissive policies | Database (Supabase) |
+| Brute-force login | Supabase Auth rate limiting | Infrastructure |
+| API abuse | In-process rate limiter | API middleware |

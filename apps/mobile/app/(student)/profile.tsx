@@ -1,7 +1,8 @@
 /**
- * Student profile — 12_Mobile_App_Spec §2.
+ * Student profile — read-only academic record plus sign-out.
  *
- * Read-only view of the academic record plus sign-out.
+ * The register number is shown but never editable: it is the institutional
+ * identifier, and the submission history hangs off it.
  */
 
 import { useState } from 'react';
@@ -15,7 +16,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { colors, fontSize, spacing } from '@/constants/theme';
 
 export default function ProfileScreen() {
-  const { data, isLoading } = useMyProfile();
+  const { data: student, isLoading } = useMyProfile();
   const logout = useAuthStore((state) => state.logout);
   const user = useAuthStore((state) => state.user);
 
@@ -26,8 +27,6 @@ export default function ProfileScreen() {
     await logout();
     router.replace('/(auth)/login');
   };
-
-  const student = data?.value;
 
   return (
     <Screen>
@@ -49,10 +48,16 @@ export default function ProfileScreen() {
         )}
       </Card>
 
+      <Card title="How attendance works">
+        <Text style={styles.muted}>
+          Answer the daily questions each day. Your faculty coordinator reviews your answers and
+          any files you attach. Once approved, that day counts towards your attendance.
+        </Text>
+      </Card>
+
       <Card title="Account">
         <Text style={styles.muted}>
-          Signing out removes your saved login and clears any drafts stored on this device. Sync
-          anything pending first.
+          Signing out removes your saved login on this device.
         </Text>
         <View style={styles.spacer} />
         <Button
@@ -80,6 +85,12 @@ const styles = StyleSheet.create({
   facts: { gap: spacing.sm },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
   rowLabel: { fontSize: fontSize.small, color: colors.textMuted, flexShrink: 0 },
-  rowValue: { fontSize: fontSize.small, color: colors.text, fontWeight: '600', flexShrink: 1, textAlign: 'right' },
+  rowValue: {
+    fontSize: fontSize.small,
+    color: colors.text,
+    fontWeight: '600',
+    flexShrink: 1,
+    textAlign: 'right',
+  },
   spacer: { height: spacing.md },
 });

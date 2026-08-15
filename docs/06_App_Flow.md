@@ -1,362 +1,242 @@
-# Application Flow — Mobile App (React Native / Expo Router)
+# 06 — Application Flow
 
-> **Version 2.0** | Screen-level flows for iOS + Android
-
----
-
-## 1. Screen Map
-
-```
-/(auth)/
-  login
-  forgot-password
-  reset-password
-
-/(student)/
-  dashboard
-  internship/
-    register          ← Registration wizard (3 steps)
-    view              ← Approved internship summary
-    documents         ← Upload checklist
-  attendance/
-    today             ← Primary daily action
-    history           ← Calendar view + list
-  work-log/
-    today
-    history/:date
-  weekly-report/
-    list
-    [weekNumber]
-  final-assessment/
-    index
-    skill-ratings
-  profile
-
-/(faculty)/
-  dashboard
-  students/
-    index             ← Search + list
-    [studentId]/
-      overview
-      attendance
-      work-logs
-      weekly-reports
-      documents
-      mentor-evaluation
-      final-assessment
-  evidence/
-    export
-
-/(mentor)/
-  dashboard
-  students/
-    index
-    [studentId]/
-      attendance      ← Verify
-      work-logs       ← Review
-  evaluation/
-    [internshipId]
-
-/(admin)/
-  users
-  organisations
-  departments
-  settings
-  audit
-```
-
----
-
-## 2. Student Onboarding Flow
+## 1. Authentication Flow
 
 ```
 App Launch
     │
     ▼
-Token valid?
-  ├── YES → Role check
-  │           ├── student   → Student Dashboard
-  │           ├── faculty   → Faculty Dashboard
-  │           ├── mentor    → Mentor Dashboard
-  │           └── admin     → Admin Panel
-  │
-  └── NO  → Login Screen
-               │
-               ▼
-           Enter email + password
-               │
-               ▼
-           POST /api/auth/login
-               │
-        ┌──────┴──────┐
-       FAIL          SUCCESS
-        │              │
-    Show error     Store tokens
-                   (expo-secure-store)
-                       │
-                       ▼
-               Register push token
-               POST /api/device-tokens
-                       │
-                       ▼
-               First login?
-               ├── YES → Profile completion prompt
-               └── NO  → Dashboard
+┌─────────────────┐     No token      ┌───────────┐
+│ Check Auth State │──────────────────▶│  Login    │
+└────────┬────────┘                    │  Screen   │
+         │ Token valid                 └─────┬─────┘
+         ▼                                   │
+┌─────────────────┐                          │ Success
+│ GET /api/auth/me│◀─────────────────────────┘
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Route by role:  │
+│ student → (student)/dashboard │
+│ faculty → (faculty)/dashboard │
+│ admin   → (faculty)/dashboard │
+└─────────────────┘
 ```
 
----
+### Login
+1. User enters email + password
+2. Supabase Auth returns JWT
+3. App stores token in memory (Zustand)
+4. `GET /api/auth/me` loads user profile
+5. Router redirects to role-appropriate tab layout
 
-## 3. Internship Registration Flow (Student)
+### Forgot Password
+1. User taps "Forgot Password" on login screen
+2. Enters email → `POST /api/auth/forgot-password`
+3. Receives reset email from Supabase
+4. Clicks link → enters new password → `POST /api/auth/reset-password`
 
-```
-Dashboard — "Register Internship" CTA
-    │
-    ▼
-Step 1: Organisation & Internship Details
-    ├── Organisation name, location
-    ├── Domain selection (chips)
-    ├── Mode (offline/online/hybrid)
-    ├── Start date, end date (date pickers)
-    └── Working hours/day
-    │
-    ▼
-Step 2: Mentor & Coordinator
-    ├── Industry mentor name, designation, email, contact
-    └── Faculty coordinator (select from list)
-    │
-    ▼
-Step 3: Document Upload
-    ├── Offer/Confirmation Letter → camera scan or file picker
-    └── Joining Proof → camera scan or file picker
-    │
-    ▼
-Review & Submit → POST /api/internships + POST /api/internships/:id/submit
-    │
-    ▼
-Pending Approval screen (polling or push notification)
-    │
-    ▼
-Push notification: "Your internship has been approved"
-    │
-    ▼
-Student Dashboard (active internship mode)
-```
+## 2. Student Flows
 
----
-
-## 4. Daily Workflow (Student)
+### 2.1 Daily Submission (Happy Path)
 
 ```
-App open (any day)
+Today Tab (Dashboard)
     │
+    │ Tap "Answer" / "Submit Today's Log"
     ▼
-Dashboard — shows today's completion status:
-    ┌─────────────────────────────┐
-    │ Today — Mon, 14 Aug 2026    │
-    │ ☐ Attendance  ☐ Work Log    │
-    └─────────────────────────────┘
+Answer Screen
     │
+    │ 1. GET /api/submissions/today → questions + existing submission
+    │ 2. Student fills in answers
+    │ 3. (Optional) Upload files:
+    │    a. POST /api/documents/upload-url
+    │    b. PUT file to signed URL
+    │    c. POST /api/documents/complete
+    │ 4. POST /api/submissions
     ▼
-Tap "Mark Attendance"
+Success → Navigate back to Today Tab
     │
+    │ Dashboard now shows: "Pending review"
     ▼
-Attendance Screen:
-    ├── Date (auto-filled, read-only)
-    ├── Status (Present/Absent/Leave/Holiday/Weekly Off)
-    ├── If Present:
-    │   ├── Reporting time (time picker)
-    │   ├── Leaving time (time picker)
-    │   ├── Mode (chips)
-    │   └── Proof upload (optional — never required)
-    ├── If Absent/Leave:
-    │   └── Reason (text)
-    └── Submit
-    │
-    ▼ (offline? → queued locally)
-    │
-    ▼
-Work Log Screen:
-    ├── Activities (textarea, 200-word counter)
-    ├── Technologies (tag input)
-    ├── Task assigned + completion status
-    ├── Learning (textarea, 100-word counter)
-    ├── Challenge + Solution
-    ├── Deliverable type (chip selection)
-    ├── Evidence (optional upload)
-    ├── Mentor interaction? (toggle)
-    └── Mentor feedback (text, shown if toggle = yes)
-    │
-    ▼ (offline? → queued locally)
-    │
-    ▼
-Dashboard — both checkmarks green ✅
+Wait for faculty review
 ```
 
-### Offline Banner Behaviour
-```
-No internet detected
-    │
-    ▼
-Yellow banner: "You're offline — submissions will sync automatically"
-    │
-User fills and submits form
-    │
-Stored in WatermelonDB SQLite
-    │
-"Pending Sync (2 items)" badge on dashboard
-    │
-Internet restored → auto POST /api/sync
-    │
-Badge clears → confirmation toast
-```
-
----
-
-## 5. Weekly Report Flow
+### 2.2 Resubmission After Decline
 
 ```
-Sunday (or any day of the week)
+Today Tab shows: "Declined" + review note
     │
+    │ Tap "Resubmit"
     ▼
-Dashboard → "Weekly Report Due" card (if week is closing)
+Answer Screen (pre-filled with previous answers)
     │
+    │ Student edits answers
+    │ POST /api/submissions (replaces answers, resets to pending)
     ▼
-Weekly Report Screen:
-    ├── Week number + dates (auto-filled, read-only)
-    ├── Days attended + hours (auto-aggregated, read-only)
-    ├── Major activities, technologies, skills (free text + tags)
-    ├── Major assignment
-    ├── Problems + solutions
-    ├── Key learning outcomes
-    ├── Mentor feedback
-    ├── Self-assessment
-    └── Upload weekly PDF (required for submission)
-    │
-    ▼
-Submit → POST /api/weekly-reports/:id/submit
-    │
-    ▼
-"Weekly report submitted" success screen
+Success → Status back to "Pending"
 ```
 
----
-
-## 6. Final Assessment Flow
+### 2.3 History
 
 ```
-Internship end date reached
-(or faculty unlocks early)
+History Tab
     │
+    │ GET /api/submissions?page=1&limit=20
     ▼
-Push notification: "Complete your final assessment"
+List of past submissions with status badges
     │
+    │ Tap a submission
     ▼
-Dashboard → "Final Assessment" card (highlighted)
-    │
-    ▼
-Final Assessment Screen — Part 1: Completion Details
-    ├── Completed successfully? (Yes/No)
-    ├── Total days attended (auto-filled)
-    ├── Total hours (auto-filled)
-    ├── Major project/task
-    ├── Technologies mastered (tags)
-    ├── Skills developed
-    └── Objectives achieved (Fully/Partially/No)
-    │
-    ▼
-Part 2: Self-Rating (8 sliders, 1–5)
-    ├── Technical knowledge
-    ├── Problem solving
-    ├── Communication
-    ├── Teamwork
-    ├── Time management
-    ├── Professional discipline
-    ├── Adaptability
-    └── Industry awareness
-    │
-    ▼
-Part 3: Feedback
-    ├── Usefulness rating 1–5 (star picker)
-    ├── Technical improvement (text)
-    ├── Employability improvement (text)
-    ├── Curriculum relation (text)
-    ├── Real-world exposure (text)
-    ├── Recommend organisation? (Yes/No)
-    └── Suggestions (text)
-    │
-    ▼
-Final Documents Upload Checklist:
-    ├── ☐ Completion Certificate
-    ├── ☐ Internship Report
-    ├── ☐ Project Report (if applicable)
-    ├── ☐ Offer/Joining Letter (may already be uploaded)
-    ├── ☐ Attendance Certificate
-    ├── ☐ Mentor Evaluation doc
-    └── ☐ Final Presentation (if applicable)
-    │
-    ▼
-Submit All → POST /api/final-assessment/:id/submit
-    │
-    ▼
-"Internship Completed" celebration screen
-Faculty notified via push + dashboard update
+Detail view: answers, documents, review note if declined
 ```
 
----
-
-## 7. Faculty Dashboard Flow
+### 2.4 Profile
 
 ```
-Faculty Login
+Profile Tab
     │
+    │ GET /api/students/me
     ▼
-Faculty Dashboard — Summary Cards:
-    ├── Active Internships: 48
-    ├── Missing Today's Log: 12
-    ├── Pending Document Review: 5
-    ├── Pending Approval: 3
-    └── Evaluations Outstanding: 7
+View: register number, name, programme, department, year, section, email, mobile
     │
+    │ Tap "Edit"
     ▼
-Tap "Missing Today's Log"
+Edit: mobile, section, year
     │
+    │ PATCH /api/students/me
     ▼
-Student list (sorted by last submission)
-    │
-    ▼
-Tap student → Student Detail View:
-    ├── Overview tab (internship summary, progress ring)
-    ├── Attendance tab (calendar heatmap)
-    ├── Work Logs tab (daily cards, searchable)
-    ├── Weekly Reports tab
-    ├── Documents tab (checklist with verify/reject)
-    ├── Mentor Evaluation tab
-    └── Final Assessment tab
-    │
-    ▼
-Evidence Export:
-    └── Tap "Export Evidence Package" → PDF or ZIP
-        POST /api/reports/export
-        (async; progress indicator; download when ready)
+Updated
 ```
 
----
+## 3. Faculty/Admin Flows
 
-## 8. Evidence Package Content
+### 3.1 Overview (Dashboard)
 
-Student-wise package:
-1. Registration & internship details
-2. Attendance calendar + summary (percentage, total hours)
-3. All daily work logs (chronological)
-4. All weekly reports
-5. Mentor evaluation
-6. Final assessment + skill ratings
-7. All uploaded certificates/documents
+```
+Overview Tab
+    │
+    │ GET /api/dashboard
+    ▼
+Cards:
+  - Pending reviews (count)
+  - Today's submissions (count)
+  - Total students
+  - Approval stats
+```
 
-Aggregate package (NBA-ready):
-- A. Planning: objectives, org list, student allocation, schedule
-- B. Participation: student-wise attendance, headcount, duration, total hours
-- C. Activities: daily logs, weekly summaries, technologies, tasks
-- D. Assessment: mentor evaluation aggregate, faculty evaluation, post-assessment
-- E. Impact Analysis: pre/post skill ratings, student feedback, mentor feedback, learning outcomes
-- F. Documentary Evidence: offer letters, completion certificates, reports, photos
+### 3.2 Review Queue
+
+```
+Review Tab
+    │
+    │ GET /api/submissions?status=pending
+    ▼
+List of pending submissions
+    │
+    │ Tap a submission
+    ▼
+Review Detail Screen [id]
+    │
+    │ View: student name, date, answers, attached documents
+    │
+    ├── Tap "Approve" → POST /api/submissions/:id/review { decision: "approved" }
+    │
+    └── Tap "Decline" → Enter reason (min 5 chars)
+                       → POST /api/submissions/:id/review { decision: "declined", reviewNote: "..." }
+```
+
+### 3.3 Bulk Review
+
+```
+Review Tab → Select multiple submissions
+    │
+    │ POST /api/submissions/review { submissionIds: [...], decision: "approved" }
+    ▼
+All selected submissions approved/declined
+```
+
+### 3.4 Students Management
+
+```
+Students Tab
+    │
+    │ GET /api/students
+    ▼
+Student list with search
+    │
+    │ Tap a student
+    ▼
+Student Detail [id]
+    │
+    │ GET /api/students/:id
+    ▼
+View: profile, attendance summary, submission history
+```
+
+### 3.5 Questions Management
+
+```
+Questions Tab
+    │
+    │ GET /api/questions
+    ▼
+List of questions (active + retired) with drag-to-reorder
+    │
+    ├── Tap "Add" → Form: prompt, type, helpText, required, options, department
+    │              → POST /api/questions → Added to list
+    │
+    ├── Tap a question → PATCH /api/questions/:id → Edit fields
+    │
+    ├── Tap "Retire" → DELETE /api/questions/:id → Soft-retired
+    │
+    └── Drag to reorder → PATCH /api/questions/reorder
+```
+
+## 4. Document Upload Flow (Detail)
+
+```
+Answer Screen → Tap "Attach File"
+    │
+    ▼
+Device file picker (PDF, JPG, PNG, HEIC)
+    │
+    │ Validate: ≤ 10 MB, allowed MIME type
+    ▼
+POST /api/documents/upload-url { filename, mimeType, sizeBytes }
+    │
+    │ Response: { documentId, uploadUrl }
+    ▼
+PUT file bytes to uploadUrl (direct to Supabase Storage)
+    │
+    ▼
+POST /api/documents/complete { documentId, submissionId }
+    │
+    │ Document attached to submission
+    ▼
+Thumbnail/badge shown in answer form
+```
+
+## 5. State Transitions
+
+### Submission Status
+
+```
+                    ┌──────────────────────┐
+                    │                      │
+[New] ──submit──▶ PENDING ──approve──▶ APPROVED (locked)
+                    │                      
+                    │──decline──▶ DECLINED ──resubmit──▶ PENDING
+                    │                                      │
+                    └──────────────────────────────────────┘
+```
+
+| From | Action | To | Who |
+|------|--------|----|-----|
+| (none) | Submit | pending | Student |
+| pending | Edit | pending | Student |
+| pending | Approve | approved | Faculty/Admin |
+| pending | Decline | declined | Faculty/Admin |
+| declined | Resubmit | pending | Student |
+| approved | (locked) | — | — |

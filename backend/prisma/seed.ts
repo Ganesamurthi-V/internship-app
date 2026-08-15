@@ -1,13 +1,17 @@
 /**
- * Database seed — creates users via Supabase Auth + application records via Prisma.
+ * Database seed — Supabase Auth accounts plus the application records.
  *
- * Idempotent: checks if users exist before creating. Demo data only outside production.
+ * Idempotent: every write is an upsert keyed on a natural unique column, so running
+ * it twice is safe and running it after a schema change tops up what is missing
+ * rather than duplicating.
+ *
+ * Demo accounts all share one password, which is fine for a development database and
+ * is why the whole demo block is skipped when NODE_ENV is production.
  */
 
 import { PrismaClient } from '@prisma/client';
 import { createClient } from '@supabase/supabase-js';
-import { SKILL_TYPES, type AttendanceStatus } from '@ims/shared-types';
-import { addDays, calculateTotalHours, daysBetween } from '@ims/shared-validation';
+import { addDays } from '@ims/shared-validation';
 
 const prisma = new PrismaClient();
 
@@ -22,19 +26,36 @@ const INSTITUTION = process.env.INSTITUTION_NAME ?? 'Sri Manakula Vinayagar Engi
 const DEV_PASSWORD = 'Internship1';
 const isProduction = process.env.NODE_ENV === 'production';
 
+/** `YYYY-MM-DD` → the UTC-midnight Date a Prisma `@db.Date` column expects. */
 function dateColumn(value: string): Date {
   const [year, month, day] = value.split('-').map(Number) as [number, number, number];
   return new Date(Date.UTC(year, month - 1, day));
 }
 
+/** Today in `YYYY-MM-DD`, in the institution's timezone. */
+function todayString(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: process.env.INSTITUTION_TIMEZONE ?? 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 /**
- * Creates a Supabase Auth user and returns the auth id.
- * If the user already exists (by email), returns the existing id.
+ * Creates a Supabase Auth user, or returns the existing id.
+ *
+ * `listUsers` is paginated and defaults to a small page, so a project with many
+ * users could miss an existing account and fall through to `createUser`. The
+ * "already registered" branch below is what makes that safe rather than fatal.
  */
-async function ensureAuthUser(email: string, password: string, metadata?: Record<string, unknown>): Promise<string> {
-  // Check if user already exists
-  const { data: existingUsers } = await supabase.auth.admin.listUsers();
-  const existing = existingUsers?.users?.find((u) => u.email === email);
+async function ensureAuthUser(
+  email: string,
+  password: string,
+  metadata?: Record<string, unknown>,
+): Promise<string> {
+  const { data: existingUsers } = await supabase.auth.admin.listUsers({ perPage: 1000 });
+  const existing = existingUsers?.users?.find((user) => user.email === email);
   if (existing) return existing.id;
 
   const { data, error } = await supabase.auth.admin.createUser({
@@ -45,10 +66,9 @@ async function ensureAuthUser(email: string, password: string, metadata?: Record
   });
 
   if (error) {
-    // If user already exists error, try to find them
     if (error.message?.includes('already been registered')) {
-      const { data: listData } = await supabase.auth.admin.listUsers();
-      const found = listData?.users?.find((u) => u.email === email);
+      const { data: listData } = await supabase.auth.admin.listUsers({ perPage: 1000 });
+      const found = listData?.users?.find((user) => user.email === email);
       if (found) return found.id;
     }
     throw new Error(`Failed to create auth user ${email}: ${error.message}`);
@@ -86,7 +106,7 @@ async function main(): Promise<void> {
   console.log(`  Departments: ${departments.length}`);
 
   // -------------------------------------------------------------------------
-  // Administrator
+  // Administrator — no department, so institution-wide scope
   // -------------------------------------------------------------------------
   const adminEmail = 'admin@smvec.ac.in';
   const adminAuthId = await ensureAuthUser(adminEmail, DEV_PASSWORD, { role: 'admin' });
@@ -107,107 +127,163 @@ async function main(): Promise<void> {
   console.log(`  Admin: ${admin.email}`);
 
   // -------------------------------------------------------------------------
-  // App settings
+  // Questions — the daily form
+  //
+  // Seeded even in production: without at least one active question the app has
+  // nothing for a student to answer, so an empty question table is a broken
+  // install rather than a clean one.
   // -------------------------------------------------------------------------
-  await prisma.appSetting.upsert({
-    where: { key: 'notifications' },
-    create: {
-      key: 'notifications',
-      value: {
-        missingDailySubmissionAt: '21:00',
-        weeklyReportReminderDay: 0,
-        weeklyReportReminderAt: '18:00',
-        finalAssessmentLeadDays: 3,
-        enabled: true,
-      },
-      updatedById: admin.id,
+  const questionSeeds = [
+    {
+      prompt: 'What did you work on today?',
+      helpText: 'Describe the tasks you actually did, not what you were assigned.',
+      type: 'long_text' as const,
+      sortOrder: 10,
+      required: true,
+      minLength: 40,
+      maxLength: 1000,
     },
-    update: {},
-  });
+    {
+      prompt: 'What did you learn?',
+      helpText: 'A tool, a technique, or something about how the team works.',
+      type: 'long_text' as const,
+      sortOrder: 20,
+      required: true,
+      minLength: 20,
+      maxLength: 800,
+    },
+    {
+      prompt: 'Did anything block you?',
+      helpText: 'Leave blank if nothing did.',
+      type: 'long_text' as const,
+      sortOrder: 30,
+      required: false,
+      minLength: null,
+      maxLength: 500,
+    },
+    {
+      prompt: 'How many hours did you work today?',
+      type: 'number' as const,
+      sortOrder: 40,
+      required: true,
+      minLength: null,
+      maxLength: null,
+    },
+    {
+      prompt: 'Did you work from the office or remotely?',
+      type: 'choice' as const,
+      sortOrder: 50,
+      required: true,
+      options: ['Office', 'Remote', 'Hybrid'],
+      minLength: null,
+      maxLength: null,
+    },
+  ];
+
+  const questions: { id: string; prompt: string }[] = [];
+
+  for (const seed of questionSeeds) {
+    // No natural unique key on questions, so match on the prompt to stay idempotent.
+    const existing = await prisma.question.findFirst({
+      where: { prompt: seed.prompt, departmentId: null },
+      select: { id: true },
+    });
+
+    if (existing) {
+      questions.push({ id: existing.id, prompt: seed.prompt });
+      continue;
+    }
+
+    const createdQuestion = await prisma.question.create({
+      data: {
+        prompt: seed.prompt,
+        helpText: 'helpText' in seed ? (seed.helpText ?? null) : null,
+        type: seed.type,
+        sortOrder: seed.sortOrder,
+        required: seed.required,
+        options: 'options' in seed && seed.options ? seed.options : undefined,
+        minLength: seed.minLength,
+        maxLength: seed.maxLength,
+        departmentId: null,
+        createdById: admin.id,
+      },
+      select: { id: true, prompt: true },
+    });
+
+    questions.push(createdQuestion);
+  }
+
+  console.log(`  Questions: ${questions.length}`);
 
   if (isProduction) {
-    console.log('  Production environment: skipping demo data.');
+    console.log('Production environment: skipping demo faculty, students and submissions.');
     return;
   }
 
   // -------------------------------------------------------------------------
-  // Demo faculty coordinator
+  // Faculty — scoped to CSE
   // -------------------------------------------------------------------------
-  const facultyAuthId = await ensureAuthUser('faculty@smvec.ac.in', DEV_PASSWORD, { role: 'faculty' });
+  const facultyEmail = 'faculty@smvec.ac.in';
+  const facultyAuthId = await ensureAuthUser(facultyEmail, DEV_PASSWORD, { role: 'faculty' });
 
   const faculty = await prisma.user.upsert({
-    where: { email: 'faculty@smvec.ac.in' },
+    where: { email: facultyEmail },
     create: {
       authId: facultyAuthId,
-      email: 'faculty@smvec.ac.in',
+      email: facultyEmail,
       role: 'faculty',
       status: 'active',
-      name: 'Dr. Anitha Rajendran',
+      name: 'Dr. Anitha Raman',
       departmentId: cse.id,
     },
-    update: { authId: facultyAuthId, departmentId: cse.id },
+    update: {
+      authId: facultyAuthId,
+      role: 'faculty',
+      status: 'active',
+      departmentId: cse.id,
+    },
     select: { id: true, email: true },
   });
 
-  // -------------------------------------------------------------------------
-  // Organisation and mentor
-  // -------------------------------------------------------------------------
-  const organisation = await prisma.organisation.upsert({
-    where: { name: 'Iinvsys Technologies' },
-    create: { name: 'Iinvsys Technologies', location: 'Puducherry' },
-    update: {},
-    select: { id: true },
-  });
-
-  const mentorAuthId = await ensureAuthUser('raj@iinvsys.example', DEV_PASSWORD, { role: 'mentor' });
-
-  const mentorUser = await prisma.user.upsert({
-    where: { email: 'raj@iinvsys.example' },
-    create: {
-      authId: mentorAuthId,
-      email: 'raj@iinvsys.example',
-      role: 'mentor',
-      status: 'active',
-      name: 'Raj Kumar',
-    },
-    update: { authId: mentorAuthId },
-    select: { id: true },
-  });
-
-  const existingMentor = await prisma.mentor.findFirst({
-    where: { email: 'raj@iinvsys.example' },
-    select: { id: true },
-  });
-
-  const mentor = existingMentor
-    ? await prisma.mentor.update({
-        where: { id: existingMentor.id },
-        data: { userId: mentorUser.id, organisationId: organisation.id },
-        select: { id: true },
-      })
-    : await prisma.mentor.create({
-        data: {
-          name: 'Raj Kumar',
-          designation: 'Senior Engineer',
-          email: 'raj@iinvsys.example',
-          contact: '9876543210',
-          organisationId: organisation.id,
-          userId: mentorUser.id,
-        },
-        select: { id: true },
-      });
+  console.log(`  Faculty: ${faculty.email}`);
 
   // -------------------------------------------------------------------------
-  // Demo students
+  // Students
   // -------------------------------------------------------------------------
   const studentSeeds = [
-    { registerNumber: '21CS101', name: 'Praveen Kumar', email: 'praveen@smvec.ac.in' },
-    { registerNumber: '21CS102', name: 'Divya Lakshmi', email: 'divya@smvec.ac.in' },
+    {
+      email: 'praveen@smvec.ac.in',
+      registerNumber: '21CS101',
+      name: 'Praveen Kumar',
+      programme: 'B.Tech Computer Science and Engineering',
+      year: 4,
+      section: 'A',
+      mobile: '9876543210',
+    },
+    {
+      email: 'divya@smvec.ac.in',
+      registerNumber: '21CS102',
+      name: 'Divya Lakshmi',
+      programme: 'B.Tech Computer Science and Engineering',
+      year: 4,
+      section: 'A',
+      mobile: '9876543211',
+    },
+    {
+      email: 'arjun@smvec.ac.in',
+      registerNumber: '21CS103',
+      name: 'Arjun Menon',
+      programme: 'B.Tech Computer Science and Engineering',
+      year: 4,
+      section: 'B',
+      mobile: '9876543212',
+    },
   ];
 
-  const students = [];
-  for (const [index, seed] of studentSeeds.entries()) {
-    const authId = await ensureAuthUser(seed.email, DEV_PASSWORD, { role: 'student', name: seed.name });
+  const students: { id: string; name: string; registerNumber: string }[] = [];
+
+  for (const seed of studentSeeds) {
+    const authId = await ensureAuthUser(seed.email, DEV_PASSWORD, { role: 'student' });
 
     const user = await prisma.user.upsert({
       where: { email: seed.email },
@@ -218,7 +294,7 @@ async function main(): Promise<void> {
         status: 'active',
         name: seed.name,
       },
-      update: { authId },
+      update: { authId, role: 'student', status: 'active' },
       select: { id: true },
     });
 
@@ -228,14 +304,20 @@ async function main(): Promise<void> {
         userId: user.id,
         registerNumber: seed.registerNumber,
         name: seed.name,
-        programme: 'B.E. Computer Science',
+        programme: seed.programme,
         departmentId: cse.id,
-        year: 3,
-        section: 'A',
+        year: seed.year,
+        section: seed.section,
         studentEmail: seed.email,
-        mobile: `98765432${10 + index}`,
+        mobile: seed.mobile,
       },
-      update: {},
+      update: {
+        userId: user.id,
+        name: seed.name,
+        departmentId: cse.id,
+        year: seed.year,
+        section: seed.section,
+      },
       select: { id: true, name: true, registerNumber: true },
     });
 
@@ -245,105 +327,111 @@ async function main(): Promise<void> {
   console.log(`  Students: ${students.length}`);
 
   // -------------------------------------------------------------------------
-  // Demo internship with attendance
+  // Submissions — a spread of statuses so both dashboards have something to show
   // -------------------------------------------------------------------------
+  const today = todayString();
   const firstStudent = students[0]!;
-  const endDate = addDays(new Date().toISOString().slice(0, 10), -1);
-  const startDate = addDays(endDate, -44);
+  const secondStudent = students[1]!;
 
-  const existingInternship = await prisma.internship.findFirst({
-    where: { studentId: firstStudent.id },
-    select: { id: true },
-  });
-
-  const internship = existingInternship
-    ? await prisma.internship.update({
-        where: { id: existingInternship.id },
-        data: { status: 'active' },
-        select: { id: true },
-      })
-    : await prisma.internship.create({
-        data: {
-          studentId: firstStudent.id,
-          organisationId: organisation.id,
-          mentorId: mentor.id,
-          facultyCoordinatorId: faculty.id,
-          domain: 'software_development',
-          mode: 'offline',
-          startDate: dateColumn(startDate),
-          endDate: dateColumn(endDate),
-          durationDays: daysBetween(startDate, endDate),
-          workingHoursPerDay: 8,
-          status: 'active',
-          submittedAt: new Date(),
-          approvedById: faculty.id,
-          approvedAt: new Date(),
-          evidenceUploadsPermitted: true,
-        },
-        select: { id: true },
-      });
-
-  const existingAttendance = await prisma.attendance.count({
-    where: { internshipId: internship.id },
-  });
-
-  if (existingAttendance === 0) {
-    let attendanceCreated = 0;
-    for (let offset = 0; offset <= daysBetween(startDate, endDate); offset += 1) {
-      const date = addDays(startDate, offset);
-      const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
-
-      let status: AttendanceStatus = 'present';
-      if (dayOfWeek === 0) status = 'weekly_off';
-      else if (offset === 10) status = 'absent';
-      else if (offset === 25) status = 'permission_leave';
-
-      const isWorkingDay = status === 'present';
-      const reportingTime = isWorkingDay ? '09:00' : null;
-      const leavingTime = isWorkingDay ? '17:30' : null;
-
-      await prisma.attendance.create({
-        data: {
-          internshipId: internship.id,
-          studentId: firstStudent.id,
-          attendanceDate: dateColumn(date),
-          status,
-          reportingTime,
-          leavingTime,
-          totalHours: calculateTotalHours(reportingTime, leavingTime),
-          mode: isWorkingDay ? 'office' : null,
-          leaveReason:
-            status === 'absent'
-              ? 'Unwell, informed the mentor by phone.'
-              : status === 'permission_leave'
-                ? 'Permission taken for a university examination.'
-                : null,
-          mentorVerified: isWorkingDay && offset % 3 === 0,
-          mentorVerifiedAt: isWorkingDay && offset % 3 === 0 ? new Date() : null,
-        },
-      });
-      attendanceCreated += 1;
+  const answerFor = (prompt: string): string => {
+    if (prompt.startsWith('What did you work on')) {
+      return 'Worked through the review queue screen, wired the approve and decline actions to the API, and fixed the empty state that showed while loading.';
     }
-    console.log(`  Attendance records: ${attendanceCreated}`);
+    if (prompt.startsWith('What did you learn')) {
+      return 'Learned how the team splits server validation from client validation so the same rules run in both places.';
+    }
+    if (prompt.startsWith('Did anything block')) {
+      return 'Waited about an hour on a staging database credential.';
+    }
+    if (prompt.startsWith('How many hours')) {
+      return '8';
+    }
+    return 'Office';
+  };
+
+  /**
+   * Fourteen days back, weekdays only, with the oldest days already reviewed and the
+   * most recent left pending — which is what the review queue looks like in use.
+   */
+  let created = 0;
+
+  for (let offset = 14; offset >= 1; offset -= 1) {
+    const date = addDays(today, -offset);
+    const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+    if (weekday === 0 || weekday === 6) continue;
+
+    // The first student is diligent; the second misses the occasional day.
+    const cohort = offset % 3 === 0 ? [firstStudent] : [firstStudent, secondStudent];
+
+    for (const student of cohort) {
+      const status = offset > 4 ? 'approved' : offset > 2 ? 'declined' : 'pending';
+      const reviewed = status !== 'pending';
+
+      const submission = await prisma.dailySubmission.upsert({
+        where: {
+          studentId_submissionDate: {
+            studentId: student.id,
+            submissionDate: dateColumn(date),
+          },
+        },
+        create: {
+          studentId: student.id,
+          submissionDate: dateColumn(date),
+          status,
+          ...(reviewed
+            ? {
+                reviewedById: faculty.id,
+                reviewedAt: new Date(),
+                reviewNote:
+                  status === 'declined'
+                    ? 'Please add more detail about what you actually built.'
+                    : null,
+              }
+            : {}),
+        },
+        update: {},
+        select: { id: true },
+      });
+
+      // Answers are written once; a re-run leaves existing ones alone.
+      const existingAnswers = await prisma.answer.count({
+        where: { submissionId: submission.id },
+      });
+
+      if (existingAnswers === 0) {
+        await prisma.answer.createMany({
+          data: questions
+            // The optional "blocked" question is left unanswered on most days,
+            // which is the realistic shape.
+            .filter((question) => !question.prompt.startsWith('Did anything block') || offset % 4 === 0)
+            .map((question) => ({
+              submissionId: submission.id,
+              questionId: question.id,
+              promptSnapshot: question.prompt,
+              answerText: answerFor(question.prompt),
+            })),
+        });
+        created += 1;
+      }
+    }
   }
 
-  console.log('');
-  console.log('Demo accounts (password for all: ' + DEV_PASSWORD + ')');
-  console.log(`  admin    ${admin.email}`);
-  console.log(`  faculty  ${faculty.email}`);
-  console.log('  mentor   raj@iinvsys.example');
-  for (const student of students) {
-    console.log(`  student  ${student.registerNumber}  ${student.name}`);
+  console.log(`  Submissions with answers: ${created}`);
+
+  console.log('\nDemo accounts (password: %s)', DEV_PASSWORD);
+  console.log('  admin    admin@smvec.ac.in');
+  console.log('  faculty  faculty@smvec.ac.in');
+  for (const seed of studentSeeds) {
+    console.log(`  student  ${seed.email}  (${seed.registerNumber})`);
   }
-  console.log('');
-  console.log('Change these before exposing the API publicly.');
 }
 
 main()
   .then(async () => {
     await prisma.$disconnect();
+    console.log('\nSeed complete.');
   })
-  .catch(async (error) => {
+  .catch(async (error: unknown) => {
     console.error('Seed failed:', error);
     await prisma.$disconnect();
     process.exit(1);

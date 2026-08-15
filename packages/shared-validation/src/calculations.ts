@@ -1,36 +1,23 @@
 /**
- * Pure domain calculations.
+ * Pure domain calculations shared by the API and the app.
  *
- * These live in a shared package because both sides need them but for different
- * reasons: the mobile app uses them to render live counters and pre-filled
- * read-only fields, while the backend uses them as the authority that is written
- * to the database. 04_Database_Design §5 is explicit that aggregates are
- * computed, never trusted from the client — so the mobile results are display
- * only and the server always recomputes.
+ * Every function here is total and side-effect free, so the same input gives the
+ * same answer on the server and on the device. That is the point: an approval
+ * percentage shown in the app must match the one the API computes, and the only
+ * way to guarantee that is to run identical code.
  *
- * Every function here is deterministic and side-effect free, which is what makes
- * the unit tests in 09_Test_Plan §1 possible.
+ * Dates are handled as `YYYY-MM-DD` strings anchored to UTC midnight rather than
+ * as `Date` objects. A `Date` carries the device's timezone, which is how "today"
+ * ends up being yesterday for a student submitting at 11pm.
  */
 
-import {
-  DAYS_PER_WEEK,
-  NON_WORKING_ATTENDANCE_STATUSES,
-  type AttendanceStatus,
-  type InternshipDuration,
-} from '@ims/shared-types';
+import type { AttendanceSummary, SubmissionStatus } from '@ims/shared-types';
 
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
 
-/**
- * Counts words the same way the live counter does, so a student never sees
- * "198/200" and then gets a server rejection.
- *
- * Rules: split on any Unicode whitespace, discard empty fragments. A token of
- * pure punctuation still counts as a word — matching what a person sees on
- * screen rather than trying to be clever about language.
- */
+/** Words separated by any run of whitespace. Empty and blank strings count as 0. */
 export function countWords(text: string | null | undefined): number {
   if (!text) return 0;
   const trimmed = text.trim();
@@ -39,13 +26,20 @@ export function countWords(text: string | null | undefined): number {
 }
 
 /**
- * 07_Security_and_Privacy §6 — "strip control characters from free-text fields".
- * Removes C0/C1 control characters but keeps newline and tab, which are
- * legitimate in multi-line activity descriptions.
+ * Normalises user text before validation or storage.
+ *
+ * Strips C0/C1 control characters except newline and tab, collapses runs of blank
+ * lines, normalises line endings, and trims. Run before length checks so a string
+ * of control characters cannot satisfy a minimum and then store as empty.
  */
 export function sanitizeText(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/gu, '').trim();
+  return text
+    .replace(/\r\n?/gu, '\n')
+    // eslint-disable-next-line no-control-regex -- deliberate: strip control chars
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/gu, '')
+    .replace(/\n{3,}/gu, '\n\n')
+    .replace(/[ \t]{2,}/gu, ' ')
+    .trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -53,56 +47,50 @@ export function sanitizeText(text: string): string {
 // ---------------------------------------------------------------------------
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
-const TIME_ONLY_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/u;
-
-export function isDateOnly(value: string): boolean {
-  if (!DATE_ONLY_PATTERN.test(value)) return false;
-  const parsed = parseDateOnly(value);
-  // Rejects impossible dates like 2026-02-30, which the regex alone allows.
-  return formatDateOnly(parsed) === value;
-}
-
-export function isTimeOnly(value: string): boolean {
-  return TIME_ONLY_PATTERN.test(value);
-}
 
 /**
- * Parses `YYYY-MM-DD` into a UTC-midnight Date.
+ * True for a real calendar date in `YYYY-MM-DD`.
  *
- * UTC is deliberate: attendance dates are calendar facts, not instants. Parsing
- * as local time would shift the date by one day for users east or west of UTC
- * and corrupt the unique-per-day constraint.
+ * The round-trip comparison is what rejects `2026-02-30`: `Date` would silently
+ * roll it forward to March 2nd, so the only reliable check is to format it back
+ * and require the same string.
  */
+export function isDateOnly(value: string): boolean {
+  if (!DATE_ONLY_PATTERN.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return false;
+  return formatDateOnly(date) === value;
+}
+
+/** Parses `YYYY-MM-DD` as UTC midnight. */
 export function parseDateOnly(value: string): Date {
-  const [year, month, day] = value.split('-').map(Number) as [number, number, number];
-  return new Date(Date.UTC(year, month - 1, day));
+  return new Date(`${value}T00:00:00.000Z`);
 }
 
+/** Formats a Date as `YYYY-MM-DD` using its UTC fields. */
 export function formatDateOnly(date: Date): string {
-  const year = date.getUTCFullYear().toString().padStart(4, '0');
-  const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
-  const day = date.getUTCDate().toString().padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return date.toISOString().slice(0, 10);
 }
 
+/** Shifts a date string by whole days. Negative values move backwards. */
 export function addDays(value: string, days: number): string {
   const date = parseDateOnly(value);
   date.setUTCDate(date.getUTCDate() + days);
   return formatDateOnly(date);
 }
 
-/** Whole days from `from` to `to`. Negative when `to` precedes `from`. */
+/** Whole days from `from` to `to`. Negative when `to` is earlier. */
 export function daysBetween(from: string, to: string): number {
-  const millis = parseDateOnly(to).getTime() - parseDateOnly(from).getTime();
-  return Math.round(millis / 86_400_000);
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  return Math.round((parseDateOnly(to).getTime() - parseDateOnly(from).getTime()) / MS_PER_DAY);
 }
 
-/** True when `date` falls within `[start, end]` inclusive. */
+/** Inclusive on both ends. */
 export function isWithinRange(date: string, start: string, end: string): boolean {
-  return daysBetween(start, date) >= 0 && daysBetween(date, end) >= 0;
+  return date >= start && date <= end;
 }
 
-/** 0 = Sunday … 6 = Saturday, evaluated in UTC to match `parseDateOnly`. */
+/** 0 = Sunday, matching `Date.prototype.getUTCDay`. */
 export function dayOfWeek(value: string): number {
   return parseDateOnly(value).getUTCDay();
 }
@@ -112,176 +100,186 @@ export function isWeekend(value: string): boolean {
   return day === 0 || day === 6;
 }
 
-/** Every date from `start` to `end` inclusive. */
+/** Every date from `start` to `end` inclusive. Empty when `end` precedes `start`. */
 export function enumerateDates(start: string, end: string): string[] {
-  const total = daysBetween(start, end);
-  if (total < 0) return [];
-  return Array.from({ length: total + 1 }, (_, index) => addDays(start, index));
+  if (end < start) return [];
+  const dates: string[] = [];
+  let cursor = start;
+  while (cursor <= end) {
+    dates.push(cursor);
+    cursor = addDays(cursor, 1);
+  }
+  return dates;
 }
 
 // ---------------------------------------------------------------------------
-// Internship duration — 02_SRS §2.1
+// Submission window
 // ---------------------------------------------------------------------------
 
 /**
- * Note the difference from the database: `internships.duration_days` is a
- * generated column equal to `end_date - start_date`, which is an *exclusive*
- * span. Users expect an inclusive count ("1 June to 1 June" is one day), so
- * `calendarDays` adds one. Both values are correct for their own purpose.
+ * Whether a student may submit for `date` given what today is.
+ *
+ * `backdateDays` of 0 means today only, which is what "answer within the day to
+ * get the attendance" requires. Future dates are always rejected — a student
+ * cannot pre-answer tomorrow.
  */
-export function calculateInternshipDuration(
-  startDate: string,
-  endDate: string,
-): InternshipDuration {
-  const span = daysBetween(startDate, endDate);
-  if (span < 0) {
-    return { calendarDays: 0, workingDays: 0, totalWeeks: 0 };
+export function isSubmissionDateAllowed(options: {
+  date: string;
+  today: string;
+  backdateDays: number;
+}): boolean {
+  const { date, today, backdateDays } = options;
+  if (date > today) return false;
+  return daysBetween(date, today) <= Math.max(0, backdateDays);
+}
+
+/**
+ * Why a submission for `date` is closed, or null when it is open.
+ *
+ * Returns a message rather than a boolean so the reason can be shown to the
+ * student instead of a disabled button with no explanation.
+ */
+export function submissionLockReason(options: {
+  date: string;
+  today: string;
+  backdateDays: number;
+  existingStatus: SubmissionStatus | null;
+  allowEditWhilePending: boolean;
+}): string | null {
+  const { date, today, backdateDays, existingStatus, allowEditWhilePending } = options;
+
+  if (date > today) {
+    return 'You cannot submit for a future date.';
   }
-  const calendarDays = span + 1;
-  const workingDays = enumerateDates(startDate, endDate).filter((date) => !isWeekend(date)).length;
+
+  if (!isSubmissionDateAllowed({ date, today, backdateDays })) {
+    return backdateDays === 0
+      ? 'This day has closed. Answers must be submitted on the day.'
+      : `This day has closed. Answers can only be submitted within ${backdateDays} day(s).`;
+  }
+
+  if (existingStatus === 'approved') {
+    return 'This submission has been approved and can no longer be changed.';
+  }
+
+  if (existingStatus === 'pending' && !allowEditWhilePending) {
+    return 'Your answers are awaiting review and cannot be changed.';
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Attendance summary — derived from submission statuses
+// ---------------------------------------------------------------------------
+
+/** A submission reduced to what the summary needs. */
+export interface SubmissionTally {
+  submissionDate: string;
+  status: SubmissionStatus;
+}
+
+/** Zeroed summary, used when a student has no submissions yet. */
+export function emptyAttendanceSummary(): AttendanceSummary {
   return {
-    calendarDays,
-    workingDays,
-    totalWeeks: Math.ceil(calendarDays / DAYS_PER_WEEK),
+    daysApproved: 0,
+    daysPending: 0,
+    daysDeclined: 0,
+    daysSubmitted: 0,
+    approvalPercentage: null,
+    firstSubmissionDate: null,
+    lastSubmissionDate: null,
+  };
+}
+
+/**
+ * Rolls submissions up into the summary shown on both dashboards.
+ *
+ * `approvalPercentage` is approved over *submitted*, not over calendar days: a
+ * student is measured on the days they answered, since a day nobody was asked
+ * about is not a day they failed.
+ *
+ * Duplicate dates are collapsed by taking the strongest status for that date
+ * (approved beats pending beats declined). The unique constraint on
+ * `(student_id, submission_date)` means that should not happen, but a summary
+ * that silently double-counts would be worse than one that is defensive.
+ */
+export function summariseSubmissions(
+  submissions: readonly SubmissionTally[],
+): AttendanceSummary {
+  if (submissions.length === 0) return emptyAttendanceSummary();
+
+  const rank: Record<SubmissionStatus, number> = { declined: 0, pending: 1, approved: 2 };
+  const byDate = new Map<string, SubmissionStatus>();
+
+  for (const entry of submissions) {
+    const existing = byDate.get(entry.submissionDate);
+    if (existing === undefined || rank[entry.status] > rank[existing]) {
+      byDate.set(entry.submissionDate, entry.status);
+    }
+  }
+
+  let daysApproved = 0;
+  let daysPending = 0;
+  let daysDeclined = 0;
+
+  for (const status of byDate.values()) {
+    if (status === 'approved') daysApproved += 1;
+    else if (status === 'pending') daysPending += 1;
+    else daysDeclined += 1;
+  }
+
+  const dates = [...byDate.keys()].sort();
+  const daysSubmitted = byDate.size;
+
+  return {
+    daysApproved,
+    daysPending,
+    daysDeclined,
+    daysSubmitted,
+    approvalPercentage:
+      daysSubmitted > 0 ? Math.round((daysApproved / daysSubmitted) * 1000) / 10 : null,
+    firstSubmissionDate: dates[0] ?? null,
+    lastSubmissionDate: dates[dates.length - 1] ?? null,
   };
 }
 
 // ---------------------------------------------------------------------------
-// Attendance hours — 02_SRS §2.2
+// Answer completeness
 // ---------------------------------------------------------------------------
 
-/** Minutes since midnight for an `HH:MM` value. */
-export function timeToMinutes(time: string): number {
-  const [hours, minutes] = time.split(':').map(Number) as [number, number];
-  return hours * 60 + minutes;
+/** A question reduced to what completeness checking needs. */
+export interface RequiredQuestion {
+  id: string;
+  required: boolean;
 }
 
 /**
- * Hours between reporting and leaving time, rounded to two decimals to match the
- * `NUMERIC(5,2)` column. Returns null when either time is missing, and null when
- * leaving is not strictly after reporting — the `valid_times` CHECK constraint
- * makes that combination unstorable anyway.
- */
-export function calculateTotalHours(
-  reportingTime: string | null | undefined,
-  leavingTime: string | null | undefined,
-): number | null {
-  if (!reportingTime || !leavingTime) return null;
-  const minutes = timeToMinutes(leavingTime) - timeToMinutes(reportingTime);
-  if (minutes <= 0) return null;
-  return Math.round((minutes / 60) * 100) / 100;
-}
-
-// ---------------------------------------------------------------------------
-// Attendance percentage — 04_Database_Design §5
-// ---------------------------------------------------------------------------
-
-export interface AttendanceStatusCounts {
-  present: number;
-  absent: number;
-  permission_leave: number;
-  holiday: number;
-  weekly_off: number;
-}
-
-export function emptyStatusCounts(): AttendanceStatusCounts {
-  return { present: 0, absent: 0, permission_leave: 0, holiday: 0, weekly_off: 0 };
-}
-
-export function tallyStatuses(statuses: readonly AttendanceStatus[]): AttendanceStatusCounts {
-  const counts = emptyStatusCounts();
-  for (const status of statuses) {
-    counts[status] += 1;
-  }
-  return counts;
-}
-
-/**
- * Working days are the recorded days that actually required attendance, i.e.
- * everything except holidays and weekly offs (02_SRS §2.2).
- */
-export function countWorkingDays(counts: AttendanceStatusCounts): number {
-  return (Object.keys(counts) as AttendanceStatus[])
-    .filter((status) => !NON_WORKING_ATTENDANCE_STATUSES.includes(status))
-    .reduce((total, status) => total + counts[status], 0);
-}
-
-/**
- * `present / working_days`, as one decimal place.
+ * Ids of required questions with no non-blank answer.
  *
- * Returns 0 rather than NaN when no working days have been recorded yet, so a
- * brand-new internship renders "0%" instead of blank.
+ * Returned as a list rather than a boolean so the caller can point at the
+ * specific fields instead of saying "something is missing".
  */
-export function calculateAttendancePercentage(counts: AttendanceStatusCounts): number {
-  const workingDays = countWorkingDays(counts);
-  if (workingDays === 0) return 0;
-  return Math.round((counts.present / workingDays) * 1000) / 10;
+export function findMissingRequiredAnswers(
+  questions: readonly RequiredQuestion[],
+  answers: readonly { questionId: string; answerText: string }[],
+): string[] {
+  const answered = new Set(
+    answers
+      .filter((answer) => sanitizeText(answer.answerText).length > 0)
+      .map((answer) => answer.questionId),
+  );
+
+  return questions
+    .filter((question) => question.required && !answered.has(question.id))
+    .map((question) => question.id);
 }
 
-// ---------------------------------------------------------------------------
-// Week numbering — 04_Database_Design §5
-// ---------------------------------------------------------------------------
-
-/**
- * Week 1 starts on the internship start date, so weeks are internship-relative
- * rather than calendar-relative: `floor((date - start) / 7) + 1`.
- *
- * Returns null for dates before the start date. Dates after the end date still
- * return a number; range checking is the caller's job.
- */
-export function calculateWeekNumber(startDate: string, date: string): number | null {
-  const offset = daysBetween(startDate, date);
-  if (offset < 0) return null;
-  return Math.floor(offset / DAYS_PER_WEEK) + 1;
-}
-
-export interface WeekRange {
-  weekNumber: number;
-  weekStartDate: string;
-  weekEndDate: string;
-}
-
-/**
- * Date range for a given internship week, clamped so the final week never
- * extends past the internship end date (02_SRS §2.4: "week dates must fall
- * within internship start/end dates").
- */
-export function calculateWeekRange(
-  startDate: string,
-  endDate: string,
-  weekNumber: number,
-): WeekRange {
-  const weekStartDate = addDays(startDate, (weekNumber - 1) * DAYS_PER_WEEK);
-  const uncappedEnd = addDays(weekStartDate, DAYS_PER_WEEK - 1);
-  const weekEndDate = daysBetween(uncappedEnd, endDate) < 0 ? endDate : uncappedEnd;
-  return { weekNumber, weekStartDate, weekEndDate };
-}
-
-/** Total number of internship-relative weeks, at least 1. */
-export function countInternshipWeeks(startDate: string, endDate: string): number {
-  const span = daysBetween(startDate, endDate);
-  if (span < 0) return 0;
-  return Math.floor(span / DAYS_PER_WEEK) + 1;
-}
-
-// ---------------------------------------------------------------------------
-// Final assessment unlock — 02_SRS §2.5
-// ---------------------------------------------------------------------------
-
-/**
- * Unlocked once the end date is reached, or when faculty granted early access.
- * `today` is injected rather than read from the clock so this stays testable.
- */
-export function isFinalAssessmentUnlocked(options: {
-  endDate: string;
-  today: string;
-  facultyUnlocked: boolean;
-}): boolean {
-  if (options.facultyUnlocked) return true;
-  return daysBetween(options.endDate, options.today) >= 0;
-}
-
-/** Days until the internship ends; negative once it has passed. */
-export function daysUntilEnd(endDate: string, today: string): number {
-  return daysBetween(today, endDate);
+/** Ids of answers that do not correspond to any question offered. */
+export function findUnknownAnswers(
+  questions: readonly { id: string }[],
+  answers: readonly { questionId: string }[],
+): string[] {
+  const known = new Set(questions.map((question) => question.id));
+  return answers.map((answer) => answer.questionId).filter((id) => !known.has(id));
 }

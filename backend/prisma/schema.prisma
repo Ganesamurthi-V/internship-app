@@ -1,22 +1,21 @@
-// =============================================================================
 // Internship Management System — Prisma schema
 //
-// Mirrors docs/04_Database_Design.md §2 (tables) and §3 (indexes). Table and
-// column names are mapped to the exact snake_case identifiers in that document
-// so the SQL in the docs stays runnable against this database.
+// SCOPE
 //
-// TWO DELIBERATE DEVIATIONS FROM THE DOCUMENT, both explained at the field:
-//   1. `internships.duration_days` and `attendance.total_hours` are specified as
-//      `GENERATED ALWAYS AS (...) STORED`. Prisma cannot manage generated columns
-//      without permanent migration drift, so they are plain columns written by the
-//      server from the shared calculators. The invariant "computed, never manually
-//      entered" (04_Database_Design §5) is preserved in application code and
-//      covered by tests; the client can never supply either value.
-//   2. The CHECK-constrained TEXT columns are modelled as native Postgres enums.
-//      Same constraint, better type safety end to end.
+// The app has one loop:
 //
-// Tables added because an endpoint in 05_API_Spec cannot work without them are
-// grouped at the bottom under "SUPPORTING TABLES" and each says why it exists.
+//   1. Faculty/admin configure a set of daily questions.
+//   2. A student answers them for today and may attach files.
+//   3. That submission *is* the attendance record for the day.
+//   4. Faculty/admin review the answers and files, then approve or decline.
+//
+// Everything else has been removed. There is no mentor role, no internship or
+// organisation records, no separate attendance/work-log tables, no weekly reports,
+// no final assessment, no notifications and no export jobs.
+//
+// Attendance is not its own table on purpose: a day is "attended" when an approved
+// DailySubmission exists for it, so there is one row per student per day and no way
+// for the two to disagree.
 // =============================================================================
 
 generator client {
@@ -28,25 +27,26 @@ datasource db {
 
   // Supabase-hosted Postgres.
   //
-  // `url` is the pooled connection (Supavisor, port 6543). Serverless route
-  // handlers open and drop connections constantly, and the pooler is what keeps
-  // that from exhausting the database's connection limit.
+  // `url` is the pooled connection (Supavisor). Serverless route handlers open and
+  // drop connections constantly, and the pooler keeps that from exhausting the
+  // database's connection limit.
   //
-  // `directUrl` is the direct connection (port 5432). Prisma Migrate needs it
-  // because DDL, advisory locks and the shadow database do not work through a
-  // transaction-mode pooler.
+  // `directUrl` is the direct connection. Prisma Migrate needs it because DDL,
+  // advisory locks and the shadow database do not work through a transaction-mode
+  // pooler.
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
 // =============================================================================
-// Enums — one per CHECK constraint in 04_Database_Design §2
+// Enums
 // =============================================================================
 
+/// `admin` is faculty with institution-wide scope rather than a separate feature
+/// set, so every faculty capability check accepts both.
 enum UserRole {
   student
   faculty
-  mentor
   admin
 }
 
@@ -62,149 +62,60 @@ enum ClientPlatform {
   web
 }
 
-enum InternshipDomain {
-  software_development
-  data_science_ai_ml
-  cyber_security
-  cloud_computing
-  networking
-  web_development
-  business_management
-  other
-}
-
-enum InternshipMode {
-  offline
-  online
-  hybrid
-}
-
-enum InternshipStatus {
+/// The review state of a day's submission. `pending` is the state a student's
+/// submission lands in; only faculty move it out.
+enum SubmissionStatus {
   pending
   approved
-  active
-  completed
-  rejected
+  declined
 }
 
-enum AttendanceStatus {
-  present
-  absent
-  permission_leave
-  holiday
-  weekly_off
-}
-
-enum AttendanceMode {
-  office
-  online
-  hybrid
-}
-
-enum CompletionStatus {
-  yes
-  partially
-  no
-}
-
-enum DeliverableType {
-  code
-  documentation
-  design
-  analysis
-  testing
-  presentation
-  other
-}
-
-enum ObjectivesStatus {
-  fully
-  partially
-  no
-}
-
-/// The eight self-assessment axes from 01_PRD §4.6.
-enum SkillType {
-  technical_knowledge
-  problem_solving
-  communication
-  teamwork
-  time_management
-  professional_discipline
-  adaptability
-  industry_awareness
-}
-
-enum DocumentType {
-  offer_letter
-  joining_proof
-  completion_certificate
-  internship_report
-  project_report
-  attendance_statement
-  mentor_evaluation_doc
-  presentation
-  work_evidence
-  attendance_proof
-  weekly_report_pdf
-  other
-}
-
-enum VerificationStatus {
-  pending
-  verified
-  rejected
-}
-
-enum ExportJobStatus {
-  queued
-  running
-  ready
-  failed
+/// Free text is the default. `number` and `choice` exist so a question can be
+/// validated more tightly without needing a schema change per question.
+enum QuestionType {
+  text
+  long_text
+  number
+  choice
 }
 
 // =============================================================================
-// Users, sessions and devices
+// Users and institution
 // =============================================================================
 
 model User {
-  id           String     @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid()) @db.Uuid
+
   /// Links to Supabase auth.users.id. This is how we find the app record after
   /// validating the Supabase JWT. Unique so one auth account = one app user.
-  authId       String     @unique @map("auth_id")
-  email        String     @unique
-  role         UserRole
-  status       UserStatus @default(active)
+  authId String     @unique @map("auth_id")
+  email  String     @unique
+  role   UserRole
+  status UserStatus @default(active)
 
-  /// Display name for faculty, mentor and admin accounts.
+  /// Display name for faculty and admin accounts. A student's name lives on the
+  /// student record.
   name String?
 
-  /// The department a faculty coordinator or admin belongs to.
+  /// The department a faculty member or admin belongs to. Null means
+  /// institution-wide, which is the normal case for an admin.
   departmentId String?     @map("department_id") @db.Uuid
   department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  student             Student?
-  mentor              Mentor?
-  documents           Document[]
-  auditLogs           AuditLog[]
-  notifications       NotificationLog[]
-  exportJobs          ExportJob[]
+  student   Student?
+  documents Document[]
+  auditLogs AuditLog[]
 
-  coordinatedInternships Internship[] @relation("FacultyCoordinator")
-  approvedInternships    Internship[] @relation("InternshipApprover")
-  unlockedAssessments    FinalAssessment[] @relation("AssessmentUnlocker")
+  authoredQuestions  Question[]        @relation("QuestionAuthor")
+  reviewedSubmissions DailySubmission[] @relation("SubmissionReviewer")
 
   @@index([authId])
   @@index([role, status])
   @@map("users")
 }
-
-// =============================================================================
-// Institution structures
-// =============================================================================
 
 model Department {
   id          String   @id @default(uuid()) @db.Uuid
@@ -214,28 +125,10 @@ model Department {
 
   students Student[]
   /// Faculty and admin members assigned to this department.
-  staff    User[]
+  staff User[]
 
   @@unique([name, institution])
   @@map("departments")
-}
-
-model Organisation {
-  id        String   @id @default(uuid()) @db.Uuid
-  name      String
-  location  String?
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  mentors     Mentor[]
-  internships Internship[]
-
-  /// Unique on name alone, not (name, location): registration upserts an
-  /// organisation by the name the student typed, and a nullable column in a
-  /// unique key would let duplicates through, since Postgres treats NULLs as
-  /// distinct.
-  @@unique([name])
-  @@map("organisations")
 }
 
 model Student {
@@ -244,7 +137,7 @@ model Student {
   userId String @unique @map("user_id") @db.Uuid
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  /// The master key for a student record (01_PRD §1). Stored uppercase.
+  /// The master key for a student record. Stored uppercase.
   registerNumber String @unique @map("register_number")
   name           String
   programme      String
@@ -261,425 +154,172 @@ model Student {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  internships     Internship[]
-  attendance      Attendance[]
-  workLogs        DailyWorkLog[]
-  weeklyReports   WeeklyReport[]
-  finalAssessments FinalAssessment[]
+  submissions DailySubmission[]
 
   @@index([registerNumber])
   @@index([departmentId])
   @@map("students")
 }
 
-model Mentor {
+// =============================================================================
+// Questions
+// =============================================================================
+
+/// A question students answer each day.
+///
+/// Questions are soft-retired with `isActive` rather than deleted, because a past
+/// submission's answers still reference them and the history has to stay readable.
+model Question {
   id String @id @default(uuid()) @db.Uuid
 
-  /// Null until the mentor claims the invite link and creates an account.
-  userId String? @unique @map("user_id") @db.Uuid
-  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  prompt   String
+  helpText String?      @map("help_text")
+  type     QuestionType @default(long_text)
 
-  name        String
-  designation String?
-  email       String?
-  contact     String?
+  /// Display order on the form. Ties break by createdAt.
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+  required  Boolean @default(true)
 
-  organisationId String?       @map("organisation_id") @db.Uuid
-  organisation   Organisation? @relation(fields: [organisationId], references: [id], onDelete: SetNull)
+  /// Only meaningful for `choice`. Stored as a JSON array of strings.
+  options Json?
 
-  /// SHA-256 of the invite token. The plaintext is shown once, in the invite URL,
-  /// and is never recoverable from the database (07_Security_and_Privacy §6).
-  inviteToken   String?   @unique @map("invite_token")
-  inviteExpires DateTime? @map("invite_expires") @db.Timestamptz(6)
+  /// Character bounds for text answers, enforced by the shared validators.
+  minLength Int? @map("min_length")
+  maxLength Int? @map("max_length")
+
+  /// Scopes a question to one department. Null means it applies to everyone.
+  departmentId String? @map("department_id") @db.Uuid
+
+  /// An optional reference file attached to the question (e.g. a PDF that students
+  /// should read before answering). Nullable — most questions are text-only.
+  referenceDocId String?   @unique @map("reference_doc_id") @db.Uuid
+  referenceDoc   Document? @relation(fields: [referenceDocId], references: [id], onDelete: SetNull)
+
+  createdById String? @map("created_by") @db.Uuid
+  createdBy   User?   @relation("QuestionAuthor", fields: [createdById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  internships Internship[]
-  evaluations MentorEvaluation[]
+  answers Answer[]
 
-  @@index([email])
-  @@index([organisationId])
-  @@map("mentors")
+  @@index([isActive, sortOrder])
+  @@index([departmentId])
+  @@map("questions")
 }
 
 // =============================================================================
-// Internship
+// Daily submissions — the attendance record
 // =============================================================================
 
-model Internship {
+/// One row per student per day. Its existence means the student answered; an
+/// `approved` status means the day counts as attended.
+model DailySubmission {
   id String @id @default(uuid()) @db.Uuid
 
   studentId String  @map("student_id") @db.Uuid
   student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
-  organisationId String?       @map("organisation_id") @db.Uuid
-  organisation   Organisation? @relation(fields: [organisationId], references: [id], onDelete: SetNull)
+  /// The day being answered for, in the institution's timezone. DATE, not
+  /// timestamp, so "which day" is never a timezone question.
+  submissionDate DateTime @map("submission_date") @db.Date
 
-  mentorId String? @map("mentor_id") @db.Uuid
-  mentor   Mentor? @relation(fields: [mentorId], references: [id], onDelete: SetNull)
+  status SubmissionStatus @default(pending)
 
-  facultyCoordinatorId String? @map("faculty_coordinator_id") @db.Uuid
-  facultyCoordinator   User?   @relation("FacultyCoordinator", fields: [facultyCoordinatorId], references: [id], onDelete: SetNull)
+  submittedAt DateTime @default(now()) @map("submitted_at") @db.Timestamptz(6)
 
-  domain InternshipDomain
-  mode   InternshipMode
-
-  startDate DateTime @map("start_date") @db.Date
-  endDate   DateTime @map("end_date") @db.Date
-
-  /// DEVIATION (1): the document specifies
-  /// `GENERATED ALWAYS AS (end_date - start_date) STORED`. Written by the server
-  /// on every create/update of the dates, never accepted from the client. Kept as
-  /// the same exclusive day span as the document so any SQL in the docs still
-  /// returns the same number.
-  durationDays Int @map("duration_days")
-
-  workingHoursPerDay Decimal @map("working_hours_per_day") @db.Decimal(4, 2)
-
-  status InternshipStatus @default(pending)
-
-  approvedById String? @map("approved_by") @db.Uuid
-  approvedBy   User?   @relation("InternshipApprover", fields: [approvedById], references: [id], onDelete: SetNull)
-
-  approvedAt      DateTime? @map("approved_at") @db.Timestamptz(6)
-  rejectionReason String?   @map("rejection_reason")
-  submittedAt     DateTime? @map("submitted_at") @db.Timestamptz(6)
-
-  /// ADDITION: gates the optional daily evidence upload described in
-  /// 02_SRS §2.3 ("gated by 'Is the organisation permitting evidence uploads?'").
-  /// Defaults to false so we never invite an upload the organisation has not allowed.
-  evidenceUploadsPermitted Boolean @default(false) @map("evidence_uploads_permitted")
+  /// Set together when a reviewer acts. `reviewNote` carries the decline reason,
+  /// which the student is shown so they know what to fix.
+  reviewedById String?   @map("reviewed_by") @db.Uuid
+  reviewedBy   User?     @relation("SubmissionReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime? @map("reviewed_at") @db.Timestamptz(6)
+  reviewNote   String?   @map("review_note")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  attendance       Attendance[]
-  workLogs         DailyWorkLog[]
-  weeklyReports    WeeklyReport[]
-  finalAssessment  FinalAssessment?
-  mentorEvaluation MentorEvaluation?
-  documents        Document[]
+  answers   Answer[]
+  documents Document[]
 
-  @@index([studentId, status])
-  @@index([startDate, endDate])
-  @@index([facultyCoordinatorId])
-  @@index([organisationId])
-  @@index([status])
-  @@map("internships")
+  /// One submission per student per day. This is what makes a double submission
+  /// impossible rather than merely unlikely.
+  @@unique([studentId, submissionDate])
+  @@index([status, submissionDate])
+  @@index([studentId, submissionDate])
+  @@map("daily_submissions")
 }
 
-// =============================================================================
-// Daily operations
-// =============================================================================
-
-model Attendance {
+model Answer {
   id String @id @default(uuid()) @db.Uuid
 
-  internshipId String     @map("internship_id") @db.Uuid
-  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
+  submissionId String          @map("submission_id") @db.Uuid
+  submission   DailySubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
-  /// Denormalised from the internship so student-scoped queries and the
-  /// `attendance(student_id, attendance_date)` index work without a join.
-  studentId String  @map("student_id") @db.Uuid
-  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  questionId String   @map("question_id") @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
-  attendanceDate DateTime         @map("attendance_date") @db.Date
-  status         AttendanceStatus
+  /// The question prompt as it read when answered. Denormalised on purpose: an
+  /// edited or retired question must not silently rewrite past history.
+  promptSnapshot String @map("prompt_snapshot")
 
-  reportingTime String? @map("reporting_time")
-  leavingTime   String? @map("leaving_time")
-
-  /// DEVIATION (1): the document specifies a generated column
-  /// `EXTRACT(EPOCH FROM (leaving_time - reporting_time))/3600`.
-  /// Written by the server via `calculateTotalHours`, which produces the same
-  /// value rounded to the column's two decimals. Null when either time is absent.
-  totalHours Decimal? @map("total_hours") @db.Decimal(5, 2)
-
-  mode AttendanceMode?
-
-  /// Optional. 02_SRS §2.2 is explicit that proof must never block submission.
-  proofDocumentId String?   @unique @map("proof_document_id") @db.Uuid
-  proofDocument   Document? @relation("AttendanceProof", fields: [proofDocumentId], references: [id], onDelete: SetNull)
-
-  leaveReason String? @map("leave_reason")
-
-  /// A soft confirmation by the mentor, not a gate (02_SRS §2.2).
-  mentorVerified   Boolean   @default(false) @map("mentor_verified")
-  mentorVerifiedAt DateTime? @map("mentor_verified_at") @db.Timestamptz(6)
-
-  /// Device-generated idempotency key for offline sync. Null for online writes.
-  clientId String?   @unique @map("client_id") @db.Uuid
-  syncedAt DateTime? @map("synced_at") @db.Timestamptz(6)
+  answerText String @map("answer_text")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  /// One record per student per internship date (02_SRS §2.2).
-  @@unique([internshipId, attendanceDate])
-  @@index([internshipId, attendanceDate])
-  @@index([studentId, attendanceDate])
-  @@index([clientId])
-  @@index([mentorVerified])
-  @@map("attendance")
-}
-
-model DailyWorkLog {
-  id String @id @default(uuid()) @db.Uuid
-
-  internshipId String     @map("internship_id") @db.Uuid
-  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
-
-  studentId String  @map("student_id") @db.Uuid
-  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-
-  workDate DateTime @map("work_date") @db.Date
-
-  /// <= 200 words, enforced by the shared Zod schema on client and server.
-  activities String
-  /// Postgres TEXT[] of technology tags.
-  technologies String[]
-
-  taskAssigned     String?           @map("task_assigned")
-  completionStatus CompletionStatus? @map("completion_status")
-
-  /// <= 100 words.
-  learning  String?
-  challenge String?
-  solution  String?
-
-  deliverableType DeliverableType? @map("deliverable_type")
-
-  evidenceDocumentId String?   @unique @map("evidence_document_id") @db.Uuid
-  evidenceDocument   Document? @relation("WorkLogEvidence", fields: [evidenceDocumentId], references: [id], onDelete: SetNull)
-
-  mentorInteraction Boolean @default(false) @map("mentor_interaction")
-  mentorFeedback    String? @map("mentor_feedback")
-
-  clientId String?   @unique @map("client_id") @db.Uuid
-  syncedAt DateTime? @map("synced_at") @db.Timestamptz(6)
-
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  @@unique([internshipId, workDate])
-  @@index([internshipId, workDate])
-  @@index([studentId, workDate])
-  @@index([clientId])
-  @@index([mentorInteraction])
-  @@map("daily_work_logs")
-}
-
-// =============================================================================
-// Weekly report
-// =============================================================================
-
-model WeeklyReport {
-  id String @id @default(uuid()) @db.Uuid
-
-  internshipId String     @map("internship_id") @db.Uuid
-  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
-
-  studentId String  @map("student_id") @db.Uuid
-  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-
-  weekNumber    Int      @map("week_number")
-  weekStartDate DateTime @map("week_start_date") @db.Date
-  weekEndDate   DateTime @map("week_end_date") @db.Date
-
-  /// Auto-aggregated from attendance by the server. 02_SRS §2.4: the student
-  /// cannot override these, so the API never reads them from the request body.
-  daysAttended Int?     @map("days_attended")
-  totalHours   Decimal? @map("total_hours") @db.Decimal(6, 2)
-
-  majorActivities     String?  @map("major_activities")
-  technologiesLearned String[] @map("technologies_learned")
-  skillsDeveloped     String[] @map("skills_developed")
-  majorAssignment     String?  @map("major_assignment")
-  problems            String?
-  solutions           String?
-  learningOutcomes    String?  @map("learning_outcomes")
-  mentorFeedback      String?  @map("mentor_feedback")
-  studentSelfAssessment String? @map("student_self_assessment")
-
-  reportDocumentId String?   @unique @map("report_document_id") @db.Uuid
-  reportDocument   Document? @relation("WeeklyReportPdf", fields: [reportDocumentId], references: [id], onDelete: SetNull)
-
-  /// Null while still a draft.
-  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(6)
-
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  @@unique([internshipId, weekNumber])
-  @@index([internshipId, weekNumber])
-  @@index([studentId])
-  @@map("weekly_reports")
-}
-
-// =============================================================================
-// Final assessment
-// =============================================================================
-
-model FinalAssessment {
-  id String @id @default(uuid()) @db.Uuid
-
-  internshipId String     @unique @map("internship_id") @db.Uuid
-  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
-
-  studentId String  @map("student_id") @db.Uuid
-  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-
-  completedSuccessfully Boolean? @map("completed_successfully")
-
-  /// Auto-filled from attendance aggregation (01_PRD §4.5).
-  totalDaysAttended Int?     @map("total_days_attended")
-  totalHours        Decimal? @map("total_hours") @db.Decimal(6, 2)
-
-  majorProject         String?  @map("major_project")
-  technologiesMastered String[] @map("technologies_mastered")
-  skillsDeveloped      String[] @map("skills_developed")
-
-  objectivesStatus ObjectivesStatus? @map("objectives_status")
-  /// CHECK (usefulness_rating BETWEEN 1 AND 5) — added by migration.
-  usefulnessRating Int?              @map("usefulness_rating")
-
-  technicalImprovement     String? @map("technical_improvement")
-  employabilityImprovement String? @map("employability_improvement")
-  curriculumRelation       String? @map("curriculum_relation")
-  realWorldExposure        String? @map("real_world_exposure")
-  recommendOrganisation    Boolean? @map("recommend_organisation")
-  suggestions              String?
-
-  /// Non-null means locked. Reopening clears it and is audited as High
-  /// sensitivity (02_SRS §2.5, 07_Security_and_Privacy §9).
-  submittedAt DateTime? @map("submitted_at") @db.Timestamptz(6)
-
-  /// ADDITION: backs `POST /api/final-assessment/:id/unlock`. 02_SRS §2.5 allows
-  /// faculty to enable early access before the end date, and to reopen after
-  /// submission; neither is expressible without recording the grant.
-  facultyUnlockedAt DateTime? @map("faculty_unlocked_at") @db.Timestamptz(6)
-  facultyUnlockedById String? @map("faculty_unlocked_by") @db.Uuid
-  facultyUnlockedBy   User?   @relation("AssessmentUnlocker", fields: [facultyUnlockedById], references: [id], onDelete: SetNull)
-
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  skillRatings SkillRating[]
-
-  @@index([studentId])
-  @@map("final_assessments")
-}
-
-model SkillRating {
-  id String @id @default(uuid()) @db.Uuid
-
-  finalAssessmentId String          @map("final_assessment_id") @db.Uuid
-  finalAssessment   FinalAssessment @relation(fields: [finalAssessmentId], references: [id], onDelete: Cascade)
-
-  skillType SkillType @map("skill_type")
-  /// CHECK (rating BETWEEN 1 AND 5) — added by migration.
-  rating    Int
-
-  @@unique([finalAssessmentId, skillType])
-  @@map("skill_ratings")
-}
-
-// =============================================================================
-// Mentor evaluation
-// =============================================================================
-
-model MentorEvaluation {
-  id String @id @default(uuid()) @db.Uuid
-
-  internshipId String     @unique @map("internship_id") @db.Uuid
-  internship   Internship @relation(fields: [internshipId], references: [id], onDelete: Cascade)
-
-  mentorId String @map("mentor_id") @db.Uuid
-  mentor   Mentor @relation(fields: [mentorId], references: [id], onDelete: Cascade)
-
-  /// All ten parameters: CHECK (... BETWEEN 1 AND 5), added by migration.
-  technicalKnowledge    Int? @map("technical_knowledge")
-  problemSolving        Int? @map("problem_solving")
-  communication         Int?
-  teamwork              Int?
-  professionalBehaviour Int? @map("professional_behaviour")
-  punctualityAttendance Int? @map("punctuality_attendance")
-  abilityToLearn        Int? @map("ability_to_learn")
-  initiative            Int?
-  qualityOfWork         Int? @map("quality_of_work")
-  overallPerformance    Int? @map("overall_performance")
-
-  strengths                String?
-  improvementAreas         String?  @map("improvement_areas")
-  remarks                  String?
-  employmentRecommendation Boolean? @map("employment_recommendation")
-
-  /// 02_SRS §2.6 — the mentor's signature. Immutable once true, unless
-  /// faculty/admin reopens, which clears it and is audited.
-  digitalConfirmation Boolean   @default(false) @map("digital_confirmation")
-  submittedAt         DateTime? @map("submitted_at") @db.Timestamptz(6)
-
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  @@index([internshipId])
-  @@index([mentorId])
-  @@map("mentor_evaluations")
+  /// One answer per question per submission.
+  @@unique([submissionId, questionId])
+  @@index([submissionId])
+  @@map("answers")
 }
 
 // =============================================================================
 // Documents
 // =============================================================================
 
+/// A file a student attached to a day's submission.
+///
+/// There is no per-document review state: a document is reviewed as part of its
+/// submission, so approving the submission approves everything in it. That removes
+/// the possibility of a submission being approved while a file inside it is not.
 model Document {
   id String @id @default(uuid()) @db.Uuid
 
   ownerUserId String @map("owner_user_id") @db.Uuid
   ownerUser   User   @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
 
-  documentType DocumentType @map("document_type")
+  /// Nullable so an upload URL can be issued before the submission row exists;
+  /// `POST /api/documents/complete` attaches it.
+  submissionId String?          @map("submission_id") @db.Uuid
+  submission   DailySubmission? @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
-  /// Random UUID path, never derived from the filename or student id
-  /// (07_Security_and_Privacy §4). Server-only: excluded from every API response.
+  /// Random UUID path, never derived from the filename or student id. Server-only:
+  /// excluded from every API response.
   storageKey String @unique @map("storage_key")
 
   originalFilename String @map("original_filename")
   mimeType         String @map("mime_type")
   sizeBytes        Int    @map("size_bytes")
   /// SHA-256 for integrity.
-  checksum         String?
+  checksum String?
 
-  uploadedAt DateTime  @default(now()) @map("uploaded_at") @db.Timestamptz(6)
-  verifiedAt DateTime? @map("verified_at") @db.Timestamptz(6)
+  uploadedAt DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
 
-  verificationStatus VerificationStatus @default(pending) @map("verification_status")
-  rejectionReason    String?            @map("rejection_reason")
-  verifiedById       String?            @map("verified_by") @db.Uuid
-
-  /// ADDITION: 07_Security_and_Privacy §4 requires a deleted document's key to be
-  /// "marked deleted" while the object is removed from storage asynchronously.
-  /// A soft-delete column is what makes that two-phase deletion possible.
+  /// Soft delete: the row is marked first and the storage object is removed
+  /// afterwards, so a failed storage call cannot orphan a live row.
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  /// ADDITION: `GET /api/documents?internshipId=` cannot be served from
-  /// `owner_user_id` alone. Nullable because profile-level documents have no
-  /// internship.
-  internshipId String?     @map("internship_id") @db.Uuid
-  internship   Internship? @relation(fields: [internshipId], references: [id], onDelete: SetNull)
+  /// Reverse relation: when this document is a reference file on a question.
+  question Question?
 
-  attendanceProof Attendance?   @relation("AttendanceProof")
-  workLogEvidence DailyWorkLog? @relation("WorkLogEvidence")
-  weeklyReportPdf WeeklyReport? @relation("WeeklyReportPdf")
-
-  @@index([ownerUserId, documentType])
-  @@index([internshipId, documentType])
-  @@index([verificationStatus])
+  @@index([ownerUserId])
+  @@index([submissionId])
   @@map("documents")
 }
 
 // =============================================================================
-// Audit and notifications
+// Audit
 // =============================================================================
 
 model AuditLog {
@@ -706,75 +346,4 @@ model AuditLog {
   @@index([actorUserId])
   @@index([action])
   @@map("audit_logs")
-}
-
-model NotificationLog {
-  id String @id @default(uuid()) @db.Uuid
-
-  userId String @map("user_id") @db.Uuid
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  /// Values come from `NOTIFICATION_TYPES` in @ims/shared-types. Left as TEXT to
-  /// match 04_Database_Design, so adding a notification kind needs no migration.
-  type  String
-  title String
-  body  String?
-
-  /// In-app screen path for the tap target. Never contains student names or record
-  /// details (07_Security_and_Privacy §7).
-  data Json?
-
-  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
-  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  @@index([userId, readAt])
-  @@index([createdAt])
-  @@map("notification_logs")
-}
-
-// =============================================================================
-// SUPPORTING TABLES
-// Not in 04_Database_Design, but each is required by an endpoint in 05_API_Spec.
-// =============================================================================
-
-/// Backs the async export pair `POST /api/reports/export` (returns a job id) and
-/// `GET /api/reports/export/:jobId` (poll status, then download).
-model ExportJob {
-  id String @id @default(uuid()) @db.Uuid
-
-  requestedById String @map("requested_by") @db.Uuid
-  requestedBy   User   @relation(fields: [requestedById], references: [id], onDelete: Cascade)
-
-  scope  String
-  format String
-  /// The validated request parameters, replayed by the worker.
-  params Json
-
-  status   ExportJobStatus @default(queued)
-  progress Int             @default(0)
-
-  /// Set when ready. Downloads are issued as presigned URLs, so the key stays server-side.
-  storageKey String? @map("storage_key")
-  error      String?
-
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
-
-  @@index([requestedById, status])
-  @@index([status])
-  @@map("export_jobs")
-}
-
-/// Backs the admin-configurable notification schedule and document requirements
-/// (02_SRS §1.5 and §4: "Notification schedules are configurable by Admin").
-/// A single-row-per-key store keeps settings auditable without a migration for
-/// every new toggle.
-model AppSetting {
-  key   String @id
-  value Json
-
-  updatedById String?  @map("updated_by") @db.Uuid
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  @@map("app_settings")
 }

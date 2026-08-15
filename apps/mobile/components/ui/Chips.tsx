@@ -1,9 +1,9 @@
 /**
  * Single-select chip group.
  *
- * Used for attendance status, attendance mode, completion status, deliverable type and
- * internship domain — every enum the forms in 01_PRD §4.2 and §4.3 present as a chip
- * row rather than a dropdown, which is faster to tap on a phone.
+ * Used for choice-type question answers, status filters and the question editor's
+ * type picker — anywhere a small fixed set is faster to tap than a dropdown is to
+ * open.
  *
  * Selection uses `accessibilityRole="radio"` with `checked` state, so a screen reader
  * describes the group correctly instead of announcing a row of unrelated buttons.
@@ -24,6 +24,8 @@ interface ChipGroupProps<T extends string> {
   onChange: (value: T) => void;
   error?: string | undefined;
   required?: boolean;
+  /** Renders the group read-only, for a submission that can no longer be changed. */
+  disabled?: boolean;
 }
 
 export function ChipGroup<T extends string>({
@@ -33,6 +35,7 @@ export function ChipGroup<T extends string>({
   onChange,
   error,
   required = false,
+  disabled = false,
 }: ChipGroupProps<T>) {
   return (
     <View style={styles.container}>
@@ -50,13 +53,15 @@ export function ChipGroup<T extends string>({
             <Pressable
               key={option.value}
               onPress={() => onChange(option.value)}
+              disabled={disabled}
               accessibilityRole="radio"
               accessibilityLabel={option.label}
-              accessibilityState={{ checked: selected, selected }}
+              accessibilityState={{ checked: selected, selected, disabled }}
               style={({ pressed }) => [
                 styles.chip,
                 selected ? styles.chipSelected : styles.chipUnselected,
                 pressed && styles.pressed,
+                disabled && styles.disabled,
               ]}
             >
               <Text
@@ -97,5 +102,6 @@ const styles = StyleSheet.create({
   chipText: { fontSize: fontSize.small, fontWeight: '600', color: colors.text },
   chipTextSelected: { color: colors.onPrimary },
   pressed: { opacity: 0.85 },
+  disabled: { opacity: 0.5 },
   error: { marginTop: spacing.xs, fontSize: fontSize.small, color: colors.danger },
 });

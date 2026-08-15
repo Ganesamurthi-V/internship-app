@@ -18,7 +18,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { DocumentType } from '@ims/shared-types';
 import { env } from './env';
 import { serverError } from './errors';
 import { logger } from './logger';
@@ -27,22 +26,18 @@ import { supabaseAdmin } from './supabase';
 /**
  * Builds the object path.
  *
- * Shape: `<ownerUserId>/<documentType>/<uuid>.<ext>`
+ * Shape: `<ownerUserId>/<uuid>.<ext>`
  *
- * The owner prefix is deliberate: it makes per-user cleanup and storage
- * accounting possible, and it is not a security boundary — the bucket is private
- * and every download is mediated by an authorization check in the API. The
- * filename itself is discarded; only a validated extension is kept so that
- * Content-Type sniffing and browser downloads behave sensibly.
+ * The owner prefix is deliberate: it makes per-user cleanup and storage accounting
+ * possible. It is not a security boundary — the bucket is private and every
+ * download is mediated by an authorization check in the API. The client's filename
+ * is discarded entirely; only a validated extension is kept so browser downloads
+ * behave sensibly.
  */
-export function buildStorageKey(options: {
-  ownerUserId: string;
-  documentType: DocumentType;
-  filename: string;
-}): string {
+export function buildStorageKey(options: { ownerUserId: string; filename: string }): string {
   const extension = extractSafeExtension(options.filename);
   const suffix = extension ? `.${extension}` : '';
-  return `${options.ownerUserId}/${options.documentType}/${randomUUID()}${suffix}`;
+  return `${options.ownerUserId}/${randomUUID()}${suffix}`;
 }
 
 /** Lowercase alphanumeric extension, max 8 chars, or null when absent/suspicious. */
@@ -178,25 +173,4 @@ export async function deleteObject(storageKey: string): Promise<boolean> {
   return true;
 }
 
-/**
- * Uploads bytes generated on the server — evidence-export PDFs and CSVs, which
- * have no client to upload them. Everything a *user* supplies goes through the
- * signed-upload path instead, so file content never transits this server.
- */
-export async function uploadServerObject(options: {
-  storageKey: string;
-  body: Buffer;
-  contentType: string;
-}): Promise<void> {
-  const { error } = await supabaseAdmin()
-    .storage.from(env.STORAGE_BUCKET)
-    .upload(options.storageKey, options.body, {
-      contentType: options.contentType,
-      upsert: true,
-    });
 
-  if (error) {
-    logger.error({ storageKey: options.storageKey, error: error.message }, 'Server upload failed');
-    throw serverError('Could not store the generated file.');
-  }
-}

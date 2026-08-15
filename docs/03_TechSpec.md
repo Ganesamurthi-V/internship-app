@@ -1,316 +1,187 @@
-# Technical Specification — Cross-Platform Mobile App
-
-> **Version 2.0** | Single codebase, iOS + Android, React Native (Expo)
-
----
+# 03 — Technical Specification
 
 ## 1. Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│           Mobile App (React Native / Expo)              │
-│  iOS (Swift runtime)     Android (Kotlin runtime)       │
-│                                                         │
-│  ┌────────────┐  ┌───────────┐  ┌────────────────────┐ │
-│  │ UI Layer   │  │State Mgmt │  │  Offline Layer     │ │
-│  │ (RN + NUI) │  │(Zustand / │  │ (WatermelonDB /    │ │
-│  │            │  │React Query)│  │  SQLite + Queue)   │ │
-│  └────────────┘  └───────────┘  └────────────────────┘ │
-└─────────────────────┬───────────────────────────────────┘
-                      │ HTTPS / REST
-                      ▼
-┌─────────────────────────────────────────────────────────┐
-│                  Backend API                            │
-│  Next.js 15 Route Handlers (TypeScript)                 │
-│  OR NestJS (if API-only backend preferred)              │
-│                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐  │
-│  │  Auth    │  │  RBAC    │  │   Business Logic     │  │
-│  │  (JWT)   │  │ Middleware│  │    (Zod validated)   │  │
-│  └──────────┘  └──────────┘  └──────────────────────┘  │
-│                      │                                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐  │
-│  │PostgreSQL│  │  Object  │  │  Push Notifications  │  │
-│  │          │  │  Storage │  │  (FCM + APNs via     │  │
-│  │ (Prisma) │  │ (S3/Min) │  │   Expo Push API)     │  │
-│  └──────────┘  └──────────┘  └──────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────┐        ┌──────────────────────────────────┐
+│  Expo Mobile App │───────▶│  Next.js 15 API (App Router)     │
+│  (React Native)  │        │  Route handlers only (no pages)  │
+└─────────────────┘        └──────────┬───────────────────────┘
+                                      │
+                           ┌──────────┼───────────────────────┐
+                           │          ▼                       │
+                           │  ┌──────────────┐               │
+                           │  │ Prisma 6 ORM │               │
+                           │  └──────┬───────┘               │
+                           │         ▼                       │
+                           │  ┌──────────────┐  ┌─────────┐ │
+                           │  │  PostgreSQL   │  │ Storage │ │
+                           │  │  (Supabase)   │  │ Bucket  │ │
+                           │  └──────────────┘  └─────────┘ │
+                           │         Supabase Project        │
+                           └─────────────────────────────────┘
 ```
 
----
+## 2. Technology Stack
 
-## 2. Mobile Stack — Single Codebase
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| Mobile | Expo SDK | 57 |
+| Mobile | React Native | 0.86 |
+| Mobile | expo-router | File-based routing |
+| Mobile state | React Query + Zustand | TanStack Query v5 |
+| Backend | Next.js | 15 (App Router) |
+| ORM | Prisma | 6 |
+| Database | PostgreSQL | 15+ (Supabase) |
+| Auth | Supabase Auth | JWT with JWKS verification |
+| Storage | Supabase Storage | Private bucket, signed URLs |
+| Validation | Zod | Shared schemas |
+| Monorepo | pnpm workspaces | 9.x |
 
-### 2.1 Core Framework
+## 3. Shared Packages
 
-| Layer | Technology | Reason |
-|---|---|---|
-| Framework | **React Native 0.74+** | Single codebase, iOS + Android |
-| Build tooling | **Expo SDK 51+** | Managed workflow, OTA updates, native module access |
-| Language | **TypeScript** | Type safety across entire codebase |
-| Navigation | **Expo Router v3** (file-based) | Same routing paradigm as Next.js; deep linking free |
-| UI Components | **React Native Paper** or **NativeWind** | Material Design 3 / Tailwind-style utility classes |
-| Icons | **@expo/vector-icons** | Cross-platform icon set |
-| Forms | **React Hook Form + Zod** | Consistent with backend validation schemas |
-| State | **Zustand** (global) + **React Query / TanStack Query** (server state) | Lightweight; React Query handles caching, refetch, offline |
-| Offline DB | **WatermelonDB** (SQLite-backed) | Fast local queries; sync adapter for server reconciliation |
-| Secure storage | **expo-secure-store** | iOS Keychain / Android Keystore |
-| Push notifications | **expo-notifications** | Unified FCM + APNs wrapper |
-| Camera | **expo-camera** | Document scanning, QR codes |
-| File picker | **expo-document-picker** | PDF/image selection |
-| Image picker | **expo-image-picker** | Gallery + camera |
-| Biometrics | **expo-local-authentication** | Face ID / Touch ID / Fingerprint |
-| Network | **@react-native-community/netinfo** | Connectivity detection for offline queue |
-| Analytics | **expo-analytics** or PostHog | Usage tracking |
+### @ims/shared-types
+- Enums: UserRole, UserStatus, SubmissionStatus, QuestionType, ClientPlatform
+- Entity types and API response contracts
+- Constant limits (MAX_FILES_PER_SUBMISSION, MAX_FILE_SIZE, etc.)
 
-### 2.2 Why Expo Over Bare React Native
+### @ims/shared-validation
+- Zod schemas for all API request/response shapes
+- Validation rules used by both client and server
+- Pure domain calculations
 
-- Expo EAS Build: CI/CD for both iOS and Android from one config.
-- Expo EAS Update: Push JavaScript-only OTA updates without App Store review.
-- Managed native modules eliminate manual `android/` and `ios/` folder edits.
-- Full ejection always available if custom native code is needed later.
+## 4. Backend Architecture
 
----
-
-## 3. Backend Stack
-
-### 3.1 API Server
-
+### 4.1 Project Structure
 ```
-Next.js 15 App Router — Route Handlers (TypeScript)
-├── /api/auth/*
-├── /api/students/*
-├── /api/internships/*
-├── /api/attendance/*
-├── /api/work-logs/*
-├── /api/weekly-reports/*
-├── /api/final-assessments/*
-├── /api/mentor-evaluations/*
-├── /api/documents/*
-├── /api/reports/*
-└── /api/notifications/*
-```
-
-Alternative: **NestJS** if you prefer a dedicated REST API without Next.js coupling.
-
-### 3.2 Database
-- **PostgreSQL 16** — primary datastore
-- **Prisma** ORM — type-safe queries; migrations
-- **Redis** — session cache, notification queue, rate-limit counters
-
-### 3.3 Object Storage
-- **AWS S3** or **MinIO** (self-hosted) for documents
-- Private bucket; no public URLs
-- Presigned URLs (15-minute TTL) for upload and download
-
-### 3.4 Push Notifications
-- **Expo Push Notification Service** → routes to FCM (Android) and APNs (iOS)
-- Server calls `POST https://exp.host/--/api/v2/push/send`
-- Tokens stored per device in `device_tokens` table
-- Notification preferences configurable per user
-
-### 3.5 Authentication
-- **JWT access token** (15-minute TTL) + **refresh token** (30-day, rotating)
-- Refresh token stored in `user_sessions` table (server-side revocable)
-- Tokens stored on device via `expo-secure-store`
-- Optional: **NextAuth.js** or **Lucia** for session management
-
----
-
-## 4. Project Repository Structure
-
-```
-internship-management/
-├── apps/
-│   ├── mobile/                     # React Native / Expo app
-│   │   ├── app/                    # Expo Router screens (file-based routing)
-│   │   │   ├── (auth)/
-│   │   │   │   ├── login.tsx
-│   │   │   │   └── forgot-password.tsx
-│   │   │   ├── (student)/
-│   │   │   │   ├── dashboard.tsx
-│   │   │   │   ├── internship/
-│   │   │   │   ├── attendance/
-│   │   │   │   ├── work-log/
-│   │   │   │   ├── weekly-report/
-│   │   │   │   ├── final-assessment/
-│   │   │   │   └── documents/
-│   │   │   ├── (faculty)/
-│   │   │   │   ├── dashboard.tsx
-│   │   │   │   ├── students/
-│   │   │   │   ├── reports/
-│   │   │   │   └── evidence/
-│   │   │   ├── (mentor)/
-│   │   │   │   ├── dashboard.tsx
-│   │   │   │   ├── students/
-│   │   │   │   └── evaluation/
-│   │   │   └── (admin)/
-│   │   │       ├── users/
-│   │   │       ├── organisations/
-│   │   │       └── settings/
-│   │   ├── components/
-│   │   │   ├── forms/
-│   │   │   ├── ui/
-│   │   │   └── shared/
-│   │   ├── lib/
-│   │   │   ├── api/                # API client (fetch wrappers)
-│   │   │   ├── db/                 # WatermelonDB models and schema
-│   │   │   ├── sync/               # Offline sync logic
-│   │   │   ├── auth/               # Token management
-│   │   │   └── notifications/      # Push notification handlers
-│   │   ├── stores/                 # Zustand stores
-│   │   ├── hooks/                  # Custom React hooks
-│   │   ├── constants/
-│   │   ├── app.json                # Expo config
-│   │   └── eas.json                # EAS Build/Update config
-│   │
-│   └── web/                        # Next.js web (faculty/admin portal)
-│       ├── app/
-│       ├── components/
-│       └── ...
-│
-├── packages/
-│   ├── shared-types/               # TypeScript types shared across apps
-│   ├── shared-validation/          # Zod schemas reused in mobile + backend
-│   └── api-client/                 # Generated or hand-written API client
-│
-├── backend/                        # Next.js API or NestJS
-│   ├── src/
-│   │   ├── auth/
-│   │   ├── students/
-│   │   ├── internships/
-│   │   ├── attendance/
-│   │   ├── work-logs/
-│   │   ├── weekly-reports/
-│   │   ├── final-assessments/
-│   │   ├── mentor-evaluations/
-│   │   ├── documents/
-│   │   ├── reports/
-│   │   └── notifications/
-│   └── prisma/
-│       └── schema.prisma
-│
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── e2e/                        # Maestro or Detox E2E tests
-│
-└── README.md
+backend/
+├── prisma/
+│   ├── schema.prisma         # 8 models
+│   ├── migrations/           # PostgreSQL DDL
+│   └── seed.ts               # Dev data
+└── src/
+    ├── app/api/              # Route handlers (HTTP layer only)
+    │   ├── auth/
+    │   ├── dashboard/
+    │   ├── departments/
+    │   ├── documents/
+    │   ├── questions/
+    │   ├── students/
+    │   └── submissions/
+    ├── lib/                  # Cross-cutting concerns
+    │   ├── auth.ts           # JWT verification, user cache
+    │   ├── http.ts           # Request parsing, error responses
+    │   ├── storage.ts        # Supabase Storage helpers
+    │   ├── audit.ts          # Audit log writer
+    │   └── rateLimit.ts      # In-process rate limiter
+    └── server/               # Business logic per domain
+        ├── dashboard/
+        ├── departments/
+        ├── documents/
+        ├── questions/
+        ├── students/
+        └── submissions/
 ```
 
----
+### 4.2 Request Flow
+1. Route handler receives request
+2. JWT extracted from Authorization header → verified via `jose` + Supabase JWKS
+3. User record fetched from LRU cache (or DB on cache miss)
+4. Request body parsed and validated with Zod schema
+5. Authorization check (role + scope)
+6. Business logic in `src/server/<domain>/`
+7. Response serialized and returned
 
-## 5. Offline Sync Architecture
+### 4.3 Authentication
+- Supabase Auth issues JWTs
+- Backend verifies locally using `jose` library with Supabase JWKS endpoint
+- LRU cache stores verified user records (avoids DB lookup per request)
+- No custom session table — relies on Supabase token lifecycle
+- Password reset handled by Supabase's built-in email flow
 
+### 4.4 File Storage
+- Private Supabase Storage bucket
+- Two-phase upload:
+  1. Server generates signed upload URL with UUID storage key
+  2. Client uploads directly to Supabase
+  3. Client calls `/api/documents/complete` to record metadata and attach to submission
+- Download via signed URLs (time-limited)
+- Storage key is random UUID, never derived from user data or filename
+
+### 4.5 Database Connections
+- `DATABASE_URL` — pooled connection via Supavisor (port 6543) for runtime
+- `DIRECT_URL` — direct connection (port 5432) for Prisma Migrate
+- Transaction-mode pooler cannot handle DDL or advisory locks
+
+## 5. Mobile Architecture
+
+### 5.1 Navigation (expo-router)
 ```
-Mobile (WatermelonDB)
-       │
-       │  1. Write locally (draft state)
-       ▼
-Local SQLite (WatermelonDB)
-       │
-       │  2. Network detected
-       ▼
-Sync Queue (FIFO, persistent)
-       │
-       │  3. POST /api/sync
-       ▼
-Backend — validate + persist
-       │
-       │  4. Return server IDs + timestamps
-       ▼
-WatermelonDB updated (local IDs → server IDs)
-```
-
-**Sync endpoint:** `POST /api/sync`
-- Accepts batch of pending records (attendance, work logs)
-- Returns success/failure per record
-- Idempotent: duplicate records identified by `client_id` (UUID generated on device)
-
----
-
-## 6. File Handling Pipeline
-
-```
-1. User picks file (expo-document-picker / expo-image-picker)
-2. Client validates: MIME type ∈ {PDF, JPG, PNG, HEIC}, size ≤ 10 MB
-3. Client requests upload URL: POST /api/documents/upload-url
-4. Server generates presigned S3/MinIO PUT URL (5-min TTL)
-5. Client uploads directly to storage (no file bytes through server)
-6. Client calls: POST /api/documents/complete {storageKey, filename, mimeType, size}
-7. Server stores metadata in documents table
-8. Download: GET /api/documents/:id → redirect to presigned GET URL (15-min TTL)
-```
-
-HEIC images (from iPhone camera) are converted to JPEG client-side before upload using `expo-image-manipulator`.
-
----
-
-## 7. Security
-
-- Server-side authorization on every API route; never trust client-provided role or user ID.
-- Parameterized queries via Prisma ORM (no raw string interpolation).
-- CSRF: not applicable to React Native (no cookie-based sessions); JWT in Authorization header.
-- Rate limiting: `express-rate-limit` or Next.js middleware — 10 req/min on auth, 100 req/min on general.
-- File upload: MIME validation on both client and server; random UUID storage keys; no executable files.
-- Certificate pinning (optional, high-security deployments): `expo-build-properties` + `TrustKit`.
-- Secure HTTP headers on web: CSP, HSTS, X-Frame-Options.
-- Secrets outside source control: `.env` files, never committed.
-
----
-
-## 8. Performance Targets
-
-| Metric | Target |
-|---|---|
-| App cold start | < 2 seconds on mid-range Android |
-| API response (95th pct) | < 500 ms |
-| List render (100 items) | 60 fps scrolling |
-| Offline queue sync | < 10 seconds per day's records |
-| PDF export generation | < 5 seconds |
-| File upload (5 MB) | < 15 seconds on 4G |
-
----
-
-## 9. Development & Deployment
-
-### Dev
-```bash
-# Mobile
-cd apps/mobile
-npx expo start           # Metro bundler; scan QR to open on device
-npx expo start --ios     # iOS Simulator
-npx expo start --android # Android Emulator
+app/
+├── _layout.tsx              # Root layout + auth gate
+├── index.tsx                # Redirect based on role
+├── (auth)/
+│   ├── _layout.tsx
+│   ├── login.tsx
+│   └── forgot-password.tsx
+├── (student)/
+│   ├── _layout.tsx          # Tab navigator
+│   ├── dashboard.tsx        # Today tab
+│   ├── answer.tsx           # Answer form (push from dashboard)
+│   ├── history.tsx          # History tab
+│   └── profile.tsx          # Profile tab
+└── (faculty)/
+    ├── _layout.tsx          # Tab navigator
+    ├── dashboard.tsx        # Overview tab
+    ├── questions.tsx        # Questions management tab
+    ├── review/              # Review tab (queue + detail)
+    │   ├── _layout.tsx
+    │   ├── index.tsx
+    │   └── [id].tsx
+    └── students/            # Students tab (list + detail)
+        ├── _layout.tsx
+        ├── index.tsx
+        └── [id].tsx
 ```
 
-### Build (EAS)
-```bash
-eas build --platform ios --profile production
-eas build --platform android --profile production
-eas submit --platform ios      # Submit to App Store
-eas submit --platform android  # Submit to Play Store
+### 5.2 State Management
+- **React Query** — server state (submissions, questions, students)
+  - staleTime: 5 minutes
+  - gcTime: 30 minutes
+- **Zustand** — client state (auth tokens, UI preferences)
+  - Curried `create<T>()(...)` form (required by Zustand v5)
+
+### 5.3 API Client
+- Centralized HTTP client with auth header injection
+- Automatic token refresh on 401
+- Type-safe hooks wrapping React Query
+
+## 6. Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| No Attendance table | Attendance = approved submission; single source of truth, no drift |
+| promptSnapshot on Answer | Editing a question must not rewrite past history |
+| Answers replaced wholesale on resubmit | Simpler than diffing; old state is never needed |
+| Soft-retire questions (not delete) | Past submissions reference them |
+| Faculty cannot edit student answers | Immutable audit trail of what the student actually wrote |
+| No offline sync | Simplicity; mobile connectivity assumed |
+| In-process rate limiting | Sufficient for single-instance deployment; Redis adapter ready |
+
+## 7. Environment Variables
+
+### Backend (`backend/.env`)
+```
+DATABASE_URL=              # Pooled Supabase connection
+DIRECT_URL=                # Direct connection for migrations
+SUPABASE_URL=              # https://PROJECT.supabase.co
+SUPABASE_SERVICE_ROLE_KEY= # Server-side only
+SUPABASE_JWT_SECRET=       # For local JWT verification
 ```
 
-### OTA Update
-```bash
-eas update --branch production --message "Fix attendance sync"
+### Mobile (`apps/mobile/.env`)
 ```
-
-### CI/CD (GitHub Actions)
-```yaml
-on: push to main
-jobs:
-  - type-check
-  - unit-test
-  - eas-build (android + ios parallel)
-  - eas-update (on success)
+EXPO_PUBLIC_API_URL=       # Backend URL (LAN IP for device testing)
+EXPO_PUBLIC_SUPABASE_URL=  # Supabase project URL
+EXPO_PUBLIC_SUPABASE_ANON_KEY= # Public anon key
 ```
-
----
-
-## 10. Minimum OS Requirements
-
-| Platform | Minimum | Recommended |
-|---|---|---|
-| iOS | 15.0 | 17.0+ |
-| Android | API 30 (Android 11) | API 34 (Android 14) |

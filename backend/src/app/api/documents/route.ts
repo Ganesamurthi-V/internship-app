@@ -1,29 +1,24 @@
 /**
- * GET /api/documents?internshipId=&type=&studentId= — 05_API_Spec "Documents".
+ * GET /api/documents — the caller's files that are not yet attached to a submission.
  *
- * Matrix: "RW own | R assigned | RW scoped | RW". When `internshipId` is supplied the
- * list is authorized against that internship; without it, a non-staff caller sees
- * only their own uploads.
+ * The staging list for the daily form: a student picks files, they land here, and
+ * `POST /api/submissions` attaches them. Files already attached are read through the
+ * submission that owns them.
  */
 
 import type { NextRequest } from 'next/server';
-import { documentListQuerySchema } from '@ims/shared-validation';
-import { ok, parseQuery, withErrorHandling } from '@/lib/http';
+import { ok, withErrorHandling } from '@/lib/http';
 import { requireAuth } from '@/lib/auth/context';
-import { listDocuments } from '@/server/documents/documentService';
+import { requireStudentId } from '@/lib/auth/guards';
+import { enforceRateLimit } from '@/lib/rateLimit';
+import { listUnattached } from '@/server/documents/documentService';
 
 export const GET = withErrorHandling(async (request: NextRequest) => {
   const auth = await requireAuth(request);
-  const query = parseQuery(request, documentListQuerySchema);
+  requireStudentId(auth);
+  await enforceRateLimit('general', auth.userId);
 
-  const documents = await listDocuments(auth, {
-    internshipId: query.internshipId,
-    studentId: query.studentId,
-    type: query.type,
-    verificationStatus: query.verificationStatus,
-  });
-
-  return ok(documents);
+  return ok(await listUnattached(auth));
 });
 
 export const dynamic = 'force-dynamic';

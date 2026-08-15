@@ -1,26 +1,25 @@
 /**
- * POST /api/documents/complete — step 6 of the pipeline in 03_TechSpec §6.
+ * POST /api/documents/complete — confirm an upload landed.
  *
- * Confirms the upload landed and records metadata. The service verifies that the
- * storage key was issued to this caller and reads the object's real size and MIME
- * type from storage rather than trusting the request body.
+ * Stats the real object and records its true size and MIME type rather than the
+ * client's claim. A missing object means the upload never finished, and the
+ * reservation is removed so it cannot appear as an unopenable attachment.
  */
 
 import type { NextRequest } from 'next/server';
 import { completeUploadSchema } from '@ims/shared-validation';
-import { created, parseJson, withErrorHandling } from '@/lib/http';
+import { ok, parseJson, withErrorHandling } from '@/lib/http';
 import { requireAuth } from '@/lib/auth/context';
 import { enforceRateLimit } from '@/lib/rateLimit';
 import { completeUpload } from '@/server/documents/documentService';
 
 export const POST = withErrorHandling(async (request: NextRequest) => {
   const auth = await requireAuth(request);
-  await enforceRateLimit('uploadUrl', auth.userId);
+  await enforceRateLimit('general', auth.userId);
 
   const input = await parseJson(request, completeUploadSchema);
-  const document = await completeUpload(auth, input);
 
-  return created(document);
+  return ok(await completeUpload(auth, input));
 });
 
 export const dynamic = 'force-dynamic';

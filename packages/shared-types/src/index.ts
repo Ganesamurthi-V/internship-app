@@ -4,8 +4,8 @@
  *
  * Consumed by `@ims/backend` and `@ims/mobile`. Import from the package root:
  *
- *   import type { Attendance, ApiResponse } from '@ims/shared-types';
- *   import { ATTENDANCE_STATUSES, RATE_LIMITS } from '@ims/shared-types';
+ *   import type { DailySubmission, ApiResponse } from '@ims/shared-types';
+ *   import { SUBMISSION_STATUSES, RATE_LIMITS } from '@ims/shared-types';
  */
 
 export * from './enums';

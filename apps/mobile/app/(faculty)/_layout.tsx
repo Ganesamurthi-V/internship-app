@@ -1,30 +1,82 @@
-import { Redirect, Stack } from 'expo-router';
-import { colors } from '@/constants/theme';
+/**
+ * Faculty and admin tabs.
+ *
+ * Admins share this group: their capabilities are identical and only their data scope
+ * differs, so a separate navigator would be two copies of the same screens.
+ *
+ * Four tabs: the overview, the review queue (where the work is), the student
+ * directory, and question management.
+ */
+
+import { Redirect, Tabs } from 'expo-router';
+import { Platform } from 'react-native';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { colors, fontSize } from '@/constants/theme';
 import { useAuthStore } from '@/stores/authStore';
 
-/**
- * Faculty group. Admins share this group: 01_PRD §3 puts the admin on the web portal,
- * so on mobile they get the faculty view, which the backend leaves unscoped for them.
- */
 export default function FacultyLayout() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const role = useAuthStore((state) => state.user?.role);
 
   if (!isAuthenticated) return <Redirect href="/(auth)/login" />;
-
-  // Redirect to the concrete dashboard rather than "/" to avoid a redirect loop.
   if (role === 'student') return <Redirect href="/(student)/dashboard" />;
-  if (role === 'mentor') return <Redirect href="/(mentor)/dashboard" />;
 
   return (
-    <Stack
+    <Tabs
       screenOptions={{
         headerStyle: { backgroundColor: colors.primary },
         headerTintColor: colors.onPrimary,
+        headerTitleStyle: { fontWeight: '600' },
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarLabelStyle: { fontSize: fontSize.caption, fontWeight: '600' },
+        tabBarStyle: {
+          backgroundColor: colors.surface,
+          borderTopColor: colors.border,
+          height: Platform.OS === 'ios' ? 88 : 60,
+          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+          paddingTop: 6,
+        },
       }}
     >
-      <Stack.Screen name="dashboard" options={{ title: 'Faculty Dashboard' }} />
-      <Stack.Screen name="students" options={{ title: 'Students' }} />
-    </Stack>
+      <Tabs.Screen
+        name="dashboard"
+        options={{
+          title: 'Overview',
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="dashboard" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="review"
+        options={{
+          title: 'Review',
+          headerShown: false,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="fact-check" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="students"
+        options={{
+          title: 'Students',
+          headerShown: false,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="groups" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="questions"
+        options={{
+          title: 'Questions',
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="help-outline" size={size} color={color} />
+          ),
+        }}
+      />
+    </Tabs>
   );
 }

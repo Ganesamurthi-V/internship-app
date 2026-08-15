@@ -1,207 +1,317 @@
 /**
  * React Query hooks over the API client.
  *
- * Two things worth noting:
- *
- *  1. Read hooks that matter offline write their result into the local `response_cache`
- *     and fall back to it when the request fails with a network error. 02_SRS §5
- *     requires "View own records | Served from local cache" and "Faculty dashboard |
- *     Stale cache shown with last-sync timestamp", which is what `cachedAt` supports.
- *
- *  2. Attendance and work-log writes do not go through React Query mutations to the
- *     server directly — they are written to SQLite first and synced by the engine. That
- *     is what makes the offline path the *only* path, so an online submission and an
- *     offline one behave identically and there is no second code path to get wrong.
+ * Reads use generous `staleTime` values matched to how often the data actually
+ * changes, so navigating between screens serves from cache instead of refetching.
+ * Writes invalidate the specific keys they affect rather than clearing everything,
+ * which is what keeps a submission from blanking the whole screen while it saves.
  */
 
-import { useQuery, type UseQueryOptions } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseQueryOptions,
+} from '@tanstack/react-query';
 import type {
-  Attendance,
   AttendanceSummary,
-  CurrentWeekSummary,
+  DailySubmission,
+  DailySubmissionDetail,
+  DashboardResponse,
   Department,
   DocumentMeta,
-  FacultyCoordinatorOption,
-  FacultyDashboard,
-  FinalAssessmentDetail,
-  InternshipDetail,
-  MentorDashboard,
-  MentorStudentItem,
+  Pagination,
+  Question,
   Student,
-  StudentDashboard,
-  WeeklyReport,
+  StudentListItem,
+  SubmissionStatus,
+  TodayForm,
 } from '@ims/shared-types';
-import { api, ApiError } from './client';
+import type {
+  CreateQuestionInput,
+  ReviewSubmissionInput,
+  UpdateQuestionInput,
+  UpdateStudentProfileInput,
+} from '@ims/shared-validation';
+import { api } from './client';
 import { queryKeys } from './queryKeys';
-import { responseCache } from '@/lib/db/database';
-
-/** Result of an offline-tolerant read. */
-export interface CachedResult<T> {
-  value: T;
-  /** Set when the value came from the local cache rather than the network. */
-  cachedAt: number | null;
-}
-
-/**
- * Fetches, caching the response locally, and falls back to that cache on a network
- * failure. Any non-network error propagates — a 403 must surface, not be masked by
- * stale data.
- */
-async function fetchWithCache<T>(cacheKey: string, fetcher: () => Promise<T>): Promise<CachedResult<T>> {
-  try {
-    const value = await fetcher();
-    await responseCache.set(cacheKey, value);
-    return { value, cachedAt: null };
-  } catch (error) {
-    if (error instanceof ApiError && error.isNetworkError) {
-      const cached = await responseCache.get<T>(cacheKey);
-      if (cached) return { value: cached.value, cachedAt: cached.cachedAt };
-    }
-    throw error;
-  }
-}
 
 // ---------------------------------------------------------------------------
-// Dashboards
+// Dashboard
 // ---------------------------------------------------------------------------
 
-type DashboardResponse =
-  | { role: 'student'; dashboard: StudentDashboard }
-  | { role: 'mentor'; dashboard: MentorDashboard }
-  | { role: 'faculty' | 'admin'; dashboard: FacultyDashboard };
-
-export function useDashboard(
-  options?: Partial<UseQueryOptions<CachedResult<DashboardResponse>>>,
-) {
+export function useDashboard(options?: Partial<UseQueryOptions<DashboardResponse>>) {
   return useQuery({
     queryKey: queryKeys.dashboard,
-    queryFn: () => fetchWithCache('dashboard', () => api.get<DashboardResponse>('/dashboard')),
+    queryFn: () => api.get<DashboardResponse>('/dashboard'),
     ...options,
   });
 }
 
 // ---------------------------------------------------------------------------
-// Student
+// Today's form — the student's main screen
+// ---------------------------------------------------------------------------
+
+/**
+ * `date` is passed explicitly so the key changes when the student looks at another
+ * day. Kept short-lived: whether today is still open can change while the app is
+ * open, and a stale "you can still submit" is the one thing worth a refetch.
+ */
+export function useTodayForm(date: string) {
+  return useQuery({
+    queryKey: queryKeys.submissions.today(date),
+    queryFn: () => api.get<TodayForm>('/submissions/today', { date }),
+    staleTime: 60 * 1000,
+  });
+}
+
+export function useSubmitAnswers() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: {
+      date?: string;
+      answers: { questionId: string; answerText: string }[];
+      documentIds?: string[];
+    }) => api.post<DailySubmissionDetail>('/submissions', input),
+
+    onSuccess: () => {
+      // The submission changes today's form, the dashboard counters, the history
+      // list and the staged-file list. Invalidate by prefix rather than naming each.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.submissions.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.documents.unattached });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Submissions
+// ---------------------------------------------------------------------------
+
+export function useSubmissionList(filters: {
+  status?: SubmissionStatus;
+  studentId?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+}) {
+  return useQuery({
+    queryKey: queryKeys.submissions.list(filters),
+    queryFn: () =>
+      api.list<DailySubmissionDetail>('/submissions', {
+        status: filters.status,
+        studentId: filters.studentId,
+        from: filters.from,
+        to: filters.to,
+        page: filters.page ?? 1,
+      }),
+    staleTime: 60 * 1000,
+  });
+}
+
+export function useSubmission(submissionId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.submissions.detail(submissionId ?? 'none'),
+    enabled: Boolean(submissionId),
+    queryFn: () => api.get<DailySubmissionDetail>(`/submissions/${submissionId}`),
+    staleTime: 2 * 60 * 1000,
+  });
+}
+
+export function useReviewSubmission() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { submissionId: string } & ReviewSubmissionInput) =>
+      api.post<DailySubmissionDetail>(`/submissions/${input.submissionId}/review`, {
+        decision: input.decision,
+        note: input.note ?? null,
+      }),
+
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.submissions.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+      // A decision changes the student's approval percentage in the directory too.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.students.all });
+    },
+  });
+}
+
+export function useBulkReview() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: {
+      submissionIds: string[];
+      decision: 'approved' | 'declined';
+      note?: string | null;
+    }) =>
+      api.post<{ requested: number; updated: number; skipped: number }>(
+        '/submissions/review',
+        input,
+      ),
+
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.submissions.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.students.all });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Questions
+// ---------------------------------------------------------------------------
+
+export function useQuestions(activeOnly = true) {
+  return useQuery({
+    queryKey: queryKeys.questions.list(activeOnly),
+    queryFn: () => api.get<Question[]>('/questions', { activeOnly }),
+    // Questions change rarely — a reviewer edits them occasionally, not hourly.
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
+export function useCreateQuestion() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: CreateQuestionInput) => api.post<Question>('/questions', input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.questions.all });
+      // The dashboard shows the active question count.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+    },
+  });
+}
+
+export function useUpdateQuestion() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: { questionId: string } & UpdateQuestionInput) => {
+      const { questionId, ...body } = input;
+      return api.patch<Question>(`/questions/${questionId}`, body);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.questions.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+    },
+  });
+}
+
+export function useDeleteQuestion() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (questionId: string) =>
+      api.delete<{ deleted: boolean; message: string }>(`/questions/${questionId}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.questions.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Students
 // ---------------------------------------------------------------------------
 
 export function useMyProfile() {
   return useQuery({
-    queryKey: queryKeys.student.me,
-    queryFn: () => fetchWithCache('student:me', () => api.get<Student>('/students/me')),
-  });
-}
-
-/** `null` is a valid result: the student has not registered an internship yet. */
-export function useMyInternship() {
-  return useQuery({
-    queryKey: queryKeys.student.myInternship,
-    queryFn: () =>
-      fetchWithCache('internship:me', () => api.get<InternshipDetail | null>('/internships/me')),
-  });
-}
-
-export function useAttendanceSummary(internshipId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.student.attendanceSummary(internshipId ?? 'none'),
-    enabled: Boolean(internshipId),
-    // Only changes when attendance is submitted — 10 minute staleTime avoids
-    // redundant refetches when navigating between tabs.
+    queryKey: queryKeys.students.me,
+    queryFn: () => api.get<Student>('/students/me'),
     staleTime: 10 * 60 * 1000,
-    queryFn: () =>
-      fetchWithCache(`attendance:summary:${internshipId}`, () =>
-        api.get<AttendanceSummary>('/attendance/summary', { internshipId }),
-      ),
   });
 }
 
-export function useAttendanceList(internshipId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.student.attendanceAll(internshipId ?? 'none'),
-    enabled: Boolean(internshipId),
-    staleTime: 5 * 60 * 1000,
-    queryFn: () =>
-      fetchWithCache(`attendance:list:${internshipId}`, () =>
-        api.get<Attendance[]>('/attendance', { internshipId }),
-      ),
+export function useUpdateMyProfile() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: UpdateStudentProfileInput) => api.patch<Student>('/students/me', input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.students.me });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+    },
   });
 }
 
-export function useCurrentWeek(internshipId: string | undefined) {
+export function useStudentList(filters: {
+  search?: string;
+  year?: number;
+  section?: string;
+  submittedToday?: boolean;
+  page?: number;
+}) {
   return useQuery({
-    queryKey: queryKeys.student.currentWeek(internshipId ?? 'none'),
-    enabled: Boolean(internshipId),
+    queryKey: queryKeys.students.list(filters),
     queryFn: () =>
-      fetchWithCache(`weekly:current:${internshipId}`, () =>
-        api.get<CurrentWeekSummary>('/weekly-reports/current', { internshipId }),
-      ),
+      api.list<StudentListItem>('/students', {
+        search: filters.search,
+        year: filters.year,
+        section: filters.section,
+        submittedToday: filters.submittedToday,
+        page: filters.page ?? 1,
+      }),
+    staleTime: 2 * 60 * 1000,
   });
 }
 
-export function useWeeklyReports(internshipId: string | undefined) {
+/** One student plus their summary and history, as the detail screen needs it. */
+export function useStudentDetail(studentId: string | undefined) {
   return useQuery({
-    queryKey: queryKeys.student.weeklyReports(internshipId ?? 'none'),
-    enabled: Boolean(internshipId),
+    queryKey: queryKeys.students.detail(studentId ?? 'none'),
+    enabled: Boolean(studentId),
     queryFn: () =>
-      fetchWithCache(`weekly:list:${internshipId}`, () =>
-        api.get<WeeklyReport[]>('/weekly-reports', { internshipId }),
+      api.get<{ student: Student; summary: AttendanceSummary; history: DailySubmission[] }>(
+        `/students/${studentId}`,
       ),
-  });
-}
-
-export function useFinalAssessment(internshipId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.student.finalAssessment(internshipId ?? 'none'),
-    enabled: Boolean(internshipId),
-    queryFn: () =>
-      fetchWithCache(`final:${internshipId}`, () =>
-        api.get<FinalAssessmentDetail>('/final-assessment', { internshipId }),
-      ),
-  });
-}
-
-export function useDocuments(internshipId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.student.documents(internshipId ?? 'none'),
-    enabled: Boolean(internshipId),
-    queryFn: () =>
-      fetchWithCache(`documents:${internshipId}`, () =>
-        api.get<DocumentMeta[]>('/documents', { internshipId }),
-      ),
+    staleTime: 2 * 60 * 1000,
   });
 }
 
 // ---------------------------------------------------------------------------
-// Reference data for the registration wizard
+// Documents
+// ---------------------------------------------------------------------------
+
+/** Files uploaded but not yet attached — the staging list on the daily form. */
+export function useUnattachedDocuments() {
+  return useQuery({
+    queryKey: queryKeys.documents.unattached,
+    queryFn: () => api.get<DocumentMeta[]>('/documents'),
+    staleTime: 30 * 1000,
+  });
+}
+
+export function useDeleteDocument() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (documentId: string) => api.delete<void>(`/documents/${documentId}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.documents.unattached });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.submissions.all });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Reference data
 // ---------------------------------------------------------------------------
 
 export function useDepartments() {
   return useQuery({
     queryKey: queryKeys.reference.departments,
-    // Reference data changes rarely; an hour of staleness is fine and saves requests.
+    // Departments change at most once a semester.
     staleTime: 60 * 60 * 1000,
-    queryFn: () => fetchWithCache('departments', () => api.get<Department[]>('/departments')),
-  });
-}
-
-export function useFacultyCoordinators() {
-  return useQuery({
-    queryKey: queryKeys.reference.facultyCoordinators,
-    staleTime: 60 * 60 * 1000,
-    queryFn: () =>
-      fetchWithCache('faculty-coordinators', () =>
-        api.get<FacultyCoordinatorOption[]>('/faculty-coordinators'),
-      ),
+    queryFn: () => api.get<Department[]>('/departments'),
   });
 }
 
 // ---------------------------------------------------------------------------
-// Mentor
+// Re-exports
 // ---------------------------------------------------------------------------
 
-export function useMentorStudents() {
-  return useQuery({
-    queryKey: queryKeys.mentor.students,
-    queryFn: () =>
-      fetchWithCache('mentor:students', () => api.get<MentorStudentItem[]>('/mentor/students')),
-  });
-}
+export type { Pagination };

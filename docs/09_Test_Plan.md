@@ -1,144 +1,136 @@
-# Test Plan — Mobile App Enhanced
+# 09 — Test Plan
 
-> **Version 2.0** | Covers mobile-specific testing in addition to original API/unit tests
+## 1. Overview
 
----
+Testing strategy for the IMS daily submission system covering unit, integration, and end-to-end layers.
 
-## 1. Unit Tests (Vitest / Jest)
+## 2. Test Layers
 
-### Business Logic
-- Internship duration calculation (calendar days vs working days).
-- Attendance hour calculation from reporting/leaving time.
-- Attendance percentage calculation from status counts.
-- Week number derivation from internship start date.
-- Word count enforcement (200 words activities, 100 words learning).
-- Rating validation (integer 1–5).
-- Role permission functions.
-- Document type/size validation.
-- Date validation (start ≤ end, within internship period).
-- Offline queue ordering (FIFO, idempotent by clientId).
+| Layer | What | Tool | Status |
+|-------|------|------|--------|
+| Unit (shared-validation) | Zod schemas, domain calculations | Vitest | Passing (42 tests) |
+| Unit (backend) | Authorization matrix, business logic | Vitest | Passing (59 tests) |
+| Integration (API) | Full request → response with real DB | Vitest + Prisma | Not yet written |
+| E2E (mobile) | User flows on device/simulator | Detox or Maestro | Not yet written |
 
-### Validation Schemas (Zod)
-- All Zod schemas have unit tests covering valid and invalid inputs.
-- Shared schemas imported by both backend and mobile app.
+## 3. Unit Tests
 
----
+### 3.1 Shared Validation (`packages/shared-validation`)
+- Zod schema parsing (valid and invalid inputs)
+- Answer length validation (min 10, max 2000)
+- Review note length validation (min 5)
+- Question type-specific validation (choice must match options)
+- File size and MIME type validation
+- Pagination parameter parsing
 
-## 2. Integration Tests
+### 3.2 Backend Business Logic
+- Authorization matrix: every role × every action combination
+- Scope enforcement: faculty sees only own department
+- Faculty with null department sees nothing (fails closed)
+- Submission state transitions: pending → approved, pending → declined, declined → pending
+- Approved submission is immutable (edit rejected)
+- Max 20 active questions constraint
+- Max 5 documents per submission
+- Unique constraint: one submission per student per day
+- promptSnapshot is captured correctly
 
-- Registration → database → internship record created.
-- Faculty approval → student status updated → push notification queued.
-- Attendance POST → total_hours auto-calculated → summary endpoint returns correct percentage.
-- Work log → mentor_interaction flag → mentor sees in review.
-- Weekly aggregation → days/hours match attendance records exactly.
-- Final assessment → skill_ratings rows created.
-- Mentor evaluation → locked after digital confirmation.
-- Document upload-url → S3 presigned URL → complete → metadata stored.
-- Batch sync → 5 offline attendance records → all land with correct clientIds → duplicates handled.
-- Push notification → FCM/APNs delivery confirmed (sandbox).
+## 4. Integration Tests (Planned)
 
----
+### 4.1 Auth Flow
+- Login with valid credentials → JWT + user record
+- Login with invalid credentials → 401
+- Access protected route without token → 401
+- Access with expired token → 401 (triggers refresh)
+- `GET /api/auth/me` returns correct user profile
 
-## 3. Authorization Tests
+### 4.2 Submission Flow
+- Student submits for today → 201 + submission created
+- Student submits again same day (pending) → answers replaced
+- Student submits again same day (approved) → 403
+- Student submits again same day (declined) → answers replaced, status → pending
+- Answers meet length requirements
+- Answers fail length requirements → 422 with field errors
+- Submit with missing required question → 422
 
-Verify that:
-- Student A cannot read Student B's attendance, work logs, or assessment.
-- Student cannot access faculty or mentor endpoints.
-- Mentor cannot evaluate a student not assigned to them.
-- Mentor cannot approve internships.
-- Faculty cannot access records outside their department scope.
-- Unauthenticated requests to all private endpoints return 401.
-- Expired access token returns 401; valid refresh token returns new access token.
-- Revoked refresh token returns 401 and does not issue new token.
-- Direct object reference bypass: GET /api/attendance/:id with another student's ID returns 403.
-- Batch sync: clientIds from another student's device are rejected.
+### 4.3 Review Flow
+- Faculty approves pending → status = approved, reviewedBy set
+- Faculty declines without note → 422
+- Faculty declines with note → status = declined, reviewNote set
+- Faculty reviews submission from other department → 403
+- Admin reviews submission from any department → 200
+- Bulk review: mixed valid/invalid IDs handled correctly
 
----
+### 4.4 Questions Flow
+- Create question → 201
+- Create when 20 active already exist → 409
+- Retire question → isActive = false, past answers still reference it
+- Reorder → sortOrder values updated
+- Faculty creates question scoped to own department → OK
+- Faculty creates question for other department → 403
 
-## 4. Mobile-Specific Tests
+### 4.5 Documents Flow
+- Request upload URL → signed URL + document ID
+- Complete with valid document ID → attached to submission
+- Complete when 5 already attached → 409
+- Request URL for disallowed MIME type → 415
+- Request URL for file > 10 MB → 413
+- Delete own document → soft-deleted
+- Delete another's document → 403
+- Download with valid access → signed URL returned
 
-### Device Tests (run on real devices: iPhone + Android mid-range)
-- App cold start < 2 seconds.
-- Smooth list scrolling at 60 fps with 100+ attendance records.
-- Time picker renders correctly on iOS 15, iOS 17, Android 11, Android 14.
-- Date picker respects locale (DD/MM/YYYY for India).
-- Camera integration: document scan produces readable PDF.
-- File picker: selects and uploads PDF, JPG, PNG, HEIC.
-- HEIC → JPEG conversion before upload.
-- Push notification received in foreground and background.
-- Push notification deep-links to correct screen on tap.
-- Biometric lock prompts on app resume from background.
-- expo-secure-store: token survives app restart; wiped on logout.
+### 4.6 Scope Enforcement
+- Faculty GET /api/students → only own department students
+- Faculty GET /api/submissions?status=pending → only own department
+- Admin GET /api/students → all students
+- Faculty with departmentId=null → empty results (fails closed)
 
-### Offline Tests
-- Submit attendance with airplane mode ON → stored locally → no crash.
-- Reconnect → sync triggers automatically → record appears on server.
-- Submit duplicate attendance (same date, same student) while offline → only one record created on server.
-- Submit 10 consecutive offline logs → all appear in correct order after sync.
-- SQLite encryption: raw SQLite file cannot be read without decryption key.
-- Background sync does not duplicate records already confirmed by server.
+## 5. End-to-End Tests (Planned)
 
----
+### 5.1 Student Happy Path
+1. Login as student
+2. Navigate to Today tab
+3. Tap "Answer"
+4. Fill all questions
+5. Attach a document
+6. Submit
+7. Verify dashboard shows "Pending"
+8. Check History tab shows submission
 
-## 5. E2E Scenarios (Maestro or Detox)
+### 5.2 Faculty Review Path
+1. Login as faculty
+2. Navigate to Review tab
+3. Verify pending submission appears
+4. Open submission detail
+5. Approve submission
+6. Verify it disappears from queue
 
-Run on iOS Simulator + Android Emulator in CI:
+### 5.3 Decline and Resubmit
+1. Faculty declines with reason
+2. Student sees "Declined" with note on dashboard
+3. Student taps "Resubmit"
+4. Edits answers and submits
+5. Status returns to "Pending"
 
-1. **Student Registration:** login → complete profile → register internship (3 steps) → upload 2 documents → submit.
-2. **Faculty Approval:** faculty login → see pending → approve → student receives push notification.
-3. **Student Submits Attendance:** student login → mark present → enter times → submit → dashboard shows ✅.
-4. **Offline Attendance:** airplane mode → mark attendance → reconnect → verify on server.
-5. **Student Submits Work Log:** fill all fields (with word counters) → submit → faculty sees it.
-6. **Weekly Report:** student sees current week auto-aggregated → fills report → uploads PDF → submits.
-7. **Mentor Verifies Attendance:** mentor opens app → assigned student → toggle verify → confirmed.
-8. **Mentor Submits Evaluation:** fill all 10 ratings + text fields → digital confirmation → immutable.
-9. **Student Final Assessment:** 3-step form → skill ratings (8 sliders) → final documents upload → submit.
-10. **Faculty Evidence Export:** select student → export evidence → PDF downloaded with all sections.
-11. **Push Notification Flow:** miss daily log → receive reminder → tap notification → land on work log screen.
+### 5.4 Authorization E2E
+- Student cannot access faculty tabs
+- Faculty cannot access other department's data
+- Student cannot review their own submission
 
----
+## 6. Performance Tests (Planned)
 
-## 6. File Upload Tests
+| Scenario | Target |
+|----------|--------|
+| GET /api/submissions (paginated) | < 200ms p95 |
+| GET /api/dashboard | < 300ms p95 |
+| POST /api/submissions (with 10 answers) | < 500ms p95 |
+| GET /api/students (search with pg_trgm) | < 300ms p95 |
 
-- Valid PDF (< 10 MB) accepted.
-- Valid JPG/PNG/HEIC accepted.
-- Unsupported type (`.exe`, `.zip`, `.docx`) rejected at client + server.
-- Oversized file (> 10 MB) rejected at client before network call.
-- Malicious filename (`../../../etc/passwd.pdf`) neutralised — storage key is UUID.
-- Private file: presigned URL expires → 403 after TTL.
-- Deleted document: GET after delete returns 404.
-- Concurrent uploads: 3 documents simultaneously without race condition.
+## 7. Security Tests (Planned)
 
----
-
-## 7. Performance Tests
-
-- Faculty dashboard loads with 200 students in < 3 seconds.
-- Attendance list (90 days) renders in < 1 second (WatermelonDB query).
-- Batch sync of 30 offline records completes in < 15 seconds on 3G.
-- PDF export generation (full student evidence) completes in < 10 seconds.
-- PostgreSQL: attendance summary query (single student, 90 days) < 100 ms with indexes.
-
----
-
-## 8. Accessibility Tests
-
-- All screens pass iOS Accessibility Inspector.
-- All interactive elements have `accessibilityLabel`.
-- Minimum touch target 44×44 pts (iOS) / 48×48 dp (Android).
-- Dynamic Type: text scales from "Large" to "Accessibility XXL" without overflow.
-- Colour contrast ≥ 4.5:1 for all text (WCAG 2.1 AA).
-- Screen reader: VoiceOver reads forms in logical order. TalkBack equivalent.
-
----
-
-## 9. Acceptance Criteria
-
-MVP is ready when:
-
-1. A complete student internship lifecycle executes from registration through final evidence export without manual database editing.
-2. The app installs and runs correctly on iOS 15+ and Android 11+ from a single React Native codebase.
-3. Offline attendance and work logs sync correctly after connectivity is restored, with no duplicates.
-4. Faculty can generate a student evidence package as a downloadable PDF.
-5. No Authorization Test fails (student cannot read another student's data).
-6. All E2E scenarios pass in CI on both iOS Simulator and Android Emulator.
+- Token expiry handling
+- CORS enforcement
+- Rate limit enforcement (429 after threshold)
+- SQL injection via Zod (schemas reject non-string where string expected)
+- File upload: oversized file rejected before reaching storage
+- Storage key enumeration: random UUIDs not guessable
+- RLS: anon key cannot read any table via Supabase REST API

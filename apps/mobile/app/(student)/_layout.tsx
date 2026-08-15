@@ -1,10 +1,12 @@
 /**
- * Student tab navigator — 10_Project_Setup_README structure.
+ * Student tabs.
  *
- * Four visible tabs matching the daily rhythm in 06_App_Flow §4: the dashboard,
- * attendance, work log, and profile. Everything else (internship registration,
- * documents, weekly reports, final assessment) lives under their own stack layouts
- * but is hidden from the tab bar — accessed via buttons on the dashboard.
+ * Three tabs for three things a student does: answer today's questions, look at
+ * their history, and check their profile. Anything not in that list does not get a
+ * tab.
+ *
+ * The role guard sits here rather than in each screen, so an unauthenticated or
+ * non-student caller is redirected once at the group boundary.
  */
 
 import { Redirect, Tabs } from 'expo-router';
@@ -12,15 +14,15 @@ import { Platform } from 'react-native';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { colors, fontSize } from '@/constants/theme';
 import { useAuthStore } from '@/stores/authStore';
-import { SyncBadge } from '@/components/ui/SyncBadge';
 
 export default function StudentLayout() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const role = useAuthStore((state) => state.user?.role);
 
   if (!isAuthenticated) return <Redirect href="/(auth)/login" />;
+  // Redirect to the concrete dashboard, not "/", which would bounce back through
+  // the launch router and can loop if role and group ever disagree.
   if (role === 'faculty' || role === 'admin') return <Redirect href="/(faculty)/dashboard" />;
-  if (role === 'mentor') return <Redirect href="/(mentor)/dashboard" />;
 
   return (
     <Tabs
@@ -40,34 +42,21 @@ export default function StudentLayout() {
         },
       }}
     >
-      {/* Visible tabs */}
       <Tabs.Screen
         name="dashboard"
         options={{
           title: 'Today',
           tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="dashboard" size={size} color={color} />
-          ),
-          headerRight: () => <SyncBadge compact />,
-        }}
-      />
-      <Tabs.Screen
-        name="attendance"
-        options={{
-          title: 'Attendance',
-          headerShown: false,
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="check-circle" size={size} color={color} />
+            <MaterialIcons name="assignment" size={size} color={color} />
           ),
         }}
       />
       <Tabs.Screen
-        name="work-log"
+        name="history"
         options={{
-          title: 'Work Log',
-          headerShown: false,
+          title: 'History',
           tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="edit-note" size={size} color={color} />
+            <MaterialIcons name="history" size={size} color={color} />
           ),
         }}
       />
@@ -81,19 +70,8 @@ export default function StudentLayout() {
         }}
       />
 
-      {/* Hidden from tab bar — accessed via dashboard buttons */}
-      <Tabs.Screen
-        name="internship"
-        options={{ href: null, headerShown: false }}
-      />
-      <Tabs.Screen
-        name="weekly-report"
-        options={{ href: null, headerShown: false }}
-      />
-      <Tabs.Screen
-        name="final-assessment"
-        options={{ href: null, headerShown: false }}
-      />
+      {/* Pushed from the dashboard, so it gets no tab of its own. */}
+      <Tabs.Screen name="answer" options={{ href: null, title: "Today's Questions" }} />
     </Tabs>
   );
 }

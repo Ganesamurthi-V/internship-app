@@ -1,186 +1,130 @@
-# Software Requirements Specification — Enhanced for Mobile (iOS + Android)
+# 02 — Software Requirements Specification
 
-> **Version 2.0** | Single Codebase React Native (Expo)
+## 1. Authentication
 
----
+### 1.1 Login
+- Email + password via Supabase Auth
+- JWT issued by Supabase, verified locally using `jose` with JWKS
+- LRU cache of verified user records to reduce DB lookups
+- Session persists until app is killed (in-memory token store currently)
 
-## 1. System Requirements
+### 1.2 Forgot Password
+- `POST /api/auth/forgot-password` triggers Supabase's password reset email
+- `POST /api/auth/reset-password` completes the flow with the reset token
 
-### 1.1 Authentication
-- Secure login with email + password.
-- Role-based access: Student, Faculty, Mentor, Admin.
-- Biometric login (Face ID / Touch ID) after initial sign-in.
-- Students access only their own internship records.
-- Faculty/Admin access records scoped to department/administrative assignment.
-- Mentor access limited to assigned students only.
-- JWT-based authentication with refresh token rotation.
-- Secure token storage: iOS Keychain / Android Keystore via `expo-secure-store`.
-- Session expiry with automatic re-authentication prompt.
+### 1.3 Current User
+- `GET /api/auth/me` returns the authenticated user's profile and role
 
-### 1.2 Student Requirements
-- Complete registration once; all other forms pre-populate common fields.
-- Upload required documents from camera or file picker.
-- Submit daily attendance and work log each working day.
-- Submit weekly report with auto-aggregated hours/days.
-- Complete final assessment at internship end.
-- View own attendance percentage, total hours, submission history, and status at a glance.
-- Receive push notifications for missing submissions and upcoming deadlines.
-- Work offline; data syncs automatically when connectivity is restored.
+## 2. Dashboard
 
-### 1.3 Faculty Requirements
-- Dashboard showing all active internships in assigned scope.
-- Student-wise attendance overview.
-- Missing daily submissions list (sorted by last-active date).
-- Weekly progress view per student.
-- Document completeness checklist.
-- Mentor evaluation status.
-- Final outcome analytics.
-- One-tap evidence export per student or batch.
+`GET /api/dashboard` returns a role-discriminated response:
 
-### 1.4 Mentor Requirements
-- View assigned student(s).
-- Verify attendance where enabled.
-- Review work logs.
-- Submit evaluation form.
-- Provide remarks and employment recommendation.
-- Accessible via mobile app or secure web invite link (no app install required for mentor-only workflow).
+**Student dashboard:**
+- Today's submission status (none / pending / approved / declined)
+- Attendance summary (approved count, total days, percentage)
+- Recent submission history
 
-### 1.5 Admin Requirements
-- Manage users, departments, organisations, internship periods.
-- Configure notification schedules and document requirements.
-- Access audit logs.
-- Bulk export evidence for NBA review.
+**Faculty/Admin dashboard:**
+- Pending review count
+- Total students (scoped to department for faculty)
+- Today's submission count
+- Approval/decline statistics
 
----
+## 3. Questions
 
-## 2. Business Rules
+| Requirement | Detail |
+|-------------|--------|
+| Create | `POST /api/questions` — prompt, type, helpText, options, required, department scope |
+| List | `GET /api/questions` — returns active questions in sort order |
+| Update | `PATCH /api/questions/:id` — edit prompt, type, options, active status |
+| Delete | `DELETE /api/questions/:id` — soft-retire (sets `isActive = false`) |
+| Reorder | `PATCH /api/questions/reorder` — batch update sort_order values |
+| Limit | Maximum 20 active questions at any time |
+| Types | text, long_text, number, choice |
+| Choice | Options stored as JSON array; answer must be one of them |
+| Scope | Questions can be department-scoped or institution-wide (null department) |
 
-### 2.1 Internship
-- Start date must be ≤ end date.
-- Working hours per day must be a positive number.
-- Duration is auto-calculated from dates; display as working days and calendar days.
-- A student may have one active internship at a time (institution may override).
+## 4. Submissions
 
-### 2.2 Attendance
-- One attendance record per student per internship date.
-- Total hours auto-calculated from reporting/leaving time.
-- Leave/absence requires a reason field.
-- Holiday and Weekly Off do not count as attended days.
-- Attendance proof upload is optional — never block daily submission.
-- Mentor verification is a soft confirmation, not a gate.
+### 4.1 Submit Answers
+- `POST /api/submissions` with answers array
+- Each answer includes questionId and answerText
+- Server snapshots the question prompt into `promptSnapshot`
+- Creates DailySubmission + Answer rows in a transaction
+- Unique constraint: one submission per student per calendar day
 
-### 2.3 Daily Work Log
-- One daily work log per student per internship date.
-- Activities field enforces 200-word maximum (live counter shown).
-- Learning field enforces 100-word maximum (live counter shown).
-- Evidence upload is optional and gated by "Is the organisation permitting evidence uploads?" setting.
+### 4.2 Today's Form
+- `GET /api/submissions/today` returns active questions + existing submission if any
+- Used to render the answer form and detect resubmission state
 
-### 2.4 Weekly Report
-- One report per student per internship week (week = Mon–Sun or configurable).
-- Week dates must fall within internship start/end dates.
-- Days attended and total hours are pre-populated from attendance records; student cannot override without faculty unlock.
+### 4.3 Edit / Resubmit
+- If status is pending: answers are replaced wholesale
+- If status is declined: submission resets to pending, answers are replaced
+- If status is approved: submission is locked, edits rejected
 
-### 2.5 Final Assessment
-- Unlocked when internship end date is reached OR faculty manually enables early access.
-- Usefulness rating and all skill ratings must be 1–5.
-- Objectives status: Fully / Partially / No.
-- Cannot be re-submitted after final submission unless faculty/admin reopens.
+### 4.4 Review
+- `POST /api/submissions/:id/review` — approve or decline a single submission
+- `POST /api/submissions/review` — bulk review (array of submission IDs + decision)
+- Decline requires `reviewNote` (min 5 characters)
+- Sets reviewedById, reviewedAt, reviewNote, status
 
-### 2.6 Mentor Evaluation
-- Ratings must be 1–5 on all 10 parameters.
-- Mentor evaluates only assigned students.
-- Immutable after digital confirmation unless faculty/admin reopens.
+### 4.5 Validation Rules
+- Answer min length: 10 characters
+- Answer max length: 2000 characters
+- Review note min length: 5 characters (decline only)
+- Back-dating: not allowed (today only)
 
----
+## 5. Students
 
-## 3. Validation Rules
+| Endpoint | Behaviour |
+|----------|-----------|
+| `GET /api/students` | List students; faculty sees own department, admin sees all |
+| `GET /api/students/me` | Current student's profile |
+| `PATCH /api/students/me` | Update own profile (mobile, section, year) |
+| `GET /api/students/:id` | Student detail + submission summary + history |
 
-| Field | Rule |
-|---|---|
-| Email | RFC 5322 format |
-| Mobile | 10-digit Indian mobile or E.164 |
-| Dates | ISO 8601; start ≤ end |
-| Times | HH:MM; leaving > reporting |
-| Activities | ≤ 200 words |
-| Learning | ≤ 100 words |
-| Ratings | Integer 1–5 |
-| File type | PDF, JPG, PNG, HEIC |
-| File size | ≤ 10 MB per file |
-| Duplicates | Prevent duplicate attendance, work log, weekly report per date/week |
+## 6. Documents
 
----
+| Step | Endpoint | Detail |
+|------|----------|--------|
+| 1. Request URL | `POST /api/documents/upload-url` | Returns signed upload URL + document ID |
+| 2. Upload | Client PUT to signed URL | Direct to Supabase Storage |
+| 3. Confirm | `POST /api/documents/complete` | Attaches document to submission, records metadata |
+| 4. Download | `GET /api/documents/:id` | Returns signed download URL |
+| 5. Delete | `DELETE /api/documents/:id` | Soft-delete (marks deleted_at, removes from storage) |
+| 6. List unattached | `GET /api/documents` | Documents uploaded but not yet attached to a submission |
 
-## 4. Notifications
+### Constraints
+- Max 5 files per submission
+- Max 10 MB per file
+- Allowed types: PDF, JPG, PNG, HEIC
+- Storage key is a random UUID (never derived from filename or student data)
 
-| Event | Trigger | Channel |
-|---|---|---|
-| Missing daily submission | No log by configurable time (e.g., 9 PM) | Push + in-app |
-| Weekly report due | Sunday 6 PM of each internship week | Push + in-app |
-| Final assessment due | 3 days before internship end | Push + in-app |
-| Mentor evaluation request | Faculty sends; mentor gets email/push | Push + email |
-| Document rejected | Faculty marks document invalid | Push + in-app |
-| Internship approved | Faculty approves registration | Push + in-app |
+## 7. Departments
 
-Notification schedules are configurable by Admin. Push notifications use FCM (Android) and APNs (iOS) via Expo Notifications.
+- `GET /api/departments` — list all departments
+- `POST /api/departments` — create department (admin only)
 
----
+## 8. Authorization Matrix
 
-## 5. Offline Behaviour
+| Resource | Action | Allowed Roles |
+|----------|--------|---------------|
+| Submission | create/edit | Owner (student) only |
+| Submission | review | Department faculty + admin |
+| Question | create/edit/delete | Department faculty + admin |
+| Student profile | edit | Owner + admin |
+| Department | create | Admin |
+| Documents | upload/delete | Owner only |
+| Documents | view (via submission) | Owner + scoped reviewer |
 
-| Action | Offline Behaviour |
-|---|---|
-| Submit attendance | Queued locally in SQLite; submitted on reconnect |
-| Submit work log | Queued locally; submitted on reconnect |
-| View own records | Served from local cache |
-| Upload document | Upload queued; file cached locally until sent |
-| Faculty dashboard | Stale cache shown with last-sync timestamp |
-| Mentor evaluation | Requires connectivity (not queued offline) |
+Faculty scope is departmental and fails closed on null department (a faculty with no department sees nothing).
 
-Conflict policy: server record wins for approved/verified records. Student edits win for draft records.
+## 9. Business Rules
 
----
-
-## 6. Auditability
-
-Record for every significant action:
-- `actor_user_id`
-- `action` (enum)
-- `entity_type` and `entity_id`
-- `timestamp`
-- `client_platform` (ios / android / web)
-- `client_version`
-- `ip_address` (server-side)
-- `metadata` (JSON diff or additional context)
-
-Audited actions include: role changes, internship approval/rejection, attendance edits, mentor evaluation edits, document verification, final assessment reopening, report exports.
-
----
-
-## 7. Reporting
-
-System supports:
-- Attendance percentage per student (auto-calculated)
-- Total internship hours
-- Days attended vs working days
-- Daily activity history (searchable by date, tech, keyword)
-- Weekly progress timeline
-- Technology usage tags (aggregated per cohort)
-- Skill self-ratings (individual and cohort average)
-- Mentor ratings (individual and cohort average)
-- Completion status breakdown
-- Document completeness percentage
-- Organisation-wise statistics
-- Department-wise statistics
-- Internship-period statistics
-
-All reports exportable as PDF or CSV from the mobile app.
-
----
-
-## 8. Accessibility
-
-- Minimum tap target: 44×44 pts (Apple HIG) / 48×48 dp (Material).
-- Dynamic type / font scaling supported.
-- All interactive elements have accessibility labels.
-- Colour contrast meets WCAG 2.1 AA.
-- Screen reader compatible (VoiceOver / TalkBack).
+1. Attendance = count of approved DailySubmissions (no separate table)
+2. One submission per student per day (unique constraint on studentId + submissionDate)
+3. Editing a question does not alter past answers (promptSnapshot preserves history)
+4. Questions are soft-retired, never hard-deleted
+5. Faculty cannot create or edit student answers
+6. Approved submissions are immutable
+7. Declined submissions can be resubmitted (answers replaced wholesale)

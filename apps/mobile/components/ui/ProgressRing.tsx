@@ -1,8 +1,8 @@
 /**
- * Attendance percentage ring — 12_Mobile_App_Spec §3.
+ * Approval percentage ring.
  *
- * Drawn with two nested Views rather than SVG: the app has no SVG dependency, and a
- * ring is expressible as a rotated half-disc. This keeps the bundle smaller and avoids
+ * Drawn with nested Views rather than SVG: the app has no SVG dependency, and a ring
+ * is expressible as a rotated half-disc. That keeps the bundle smaller and avoids
  * `react-native-svg`, which needs its own native build.
  *
  * The implementation uses the classic two-half-circle technique. Each half is a
@@ -27,13 +27,13 @@ export function ProgressRing({
   percentage,
   size = 120,
   thickness = 10,
-  label = 'Attendance',
+  label = 'Approved',
   caption,
 }: ProgressRingProps) {
   const clamped = Math.max(0, Math.min(100, percentage));
 
-  // Attendance thresholds: institutions commonly require 75%, so the ring turns amber
-  // approaching it and red below.
+  // Institutions commonly require 75% attendance, so the ring turns amber
+  // approaching that and red below it.
   const colour =
     clamped >= 85 ? colors.success : clamped >= 75 ? colors.warning : colors.danger;
 

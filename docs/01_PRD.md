@@ -1,200 +1,109 @@
-# Internship Management System — Product Requirements Document (Enhanced)
+# 01 — Product Requirements Document
 
-> **Version 2.0** | Enhanced for Cross-Platform Mobile App (iOS + Android) using React Native
+## 1. Overview
 
----
+The Internship Management System (IMS) is a mobile-first daily submission and attendance tracking tool for Sri Manakula Vinayagar Engineering College. Students answer a set of faculty-configured questions each day and optionally attach supporting documents. The submission itself is the attendance record — there is no separate check-in step. Faculty and admins review submissions and approve or decline them.
 
-## 1. Product Overview
+## 2. Problem Statement
 
-A **cross-platform mobile-first Internship Management System** for colleges to collect, monitor, assess, and produce evidence for student internships. The system is built as a **single React Native codebase** that runs on both iOS and Android, sharing 100% of business logic and ~90% of UI.
+Tracking daily student activities during internships relies on paper logs or disconnected spreadsheets. This leads to lost records, inconsistent tracking, and no easy way for faculty to review and verify what a student did each day.
 
-The source guide defines three primary student workflows:
-1. **Internship Registration** — once per internship
-2. **Daily Internship Attendance & Work Log** — every working day
-3. **Final Internship Assessment & Feedback** — at internship completion
+## 3. Goals
 
-The system maintains a master student record keyed by Register Number and generates evidence suitable for institutional/NBA review.
+| # | Goal |
+|---|------|
+| G1 | Replace paper-based daily logs with a structured digital submission |
+| G2 | Derive attendance directly from approved submissions (single source of truth) |
+| G3 | Give faculty a streamlined review queue with approve/decline workflow |
+| G4 | Support file attachments (photos of work, PDFs) as evidence |
+| G5 | Maintain audit history with immutable snapshots of questions asked |
 
----
+## 4. Users and Roles
 
-## 2. Goals
+| Role | Description |
+|------|-------------|
+| Student | Answers daily questions, attaches documents, views own history |
+| Faculty | Manages questions, reviews submissions for their department |
+| Admin | Same capabilities as faculty, scoped to the entire institution |
 
-- Centralize all internship records in one mobile app usable on any phone.
-- Eliminate repeated entry of student/internship information.
-- Enable daily attendance and work-log submission from a mobile device.
-- Capture daily work, technologies, tasks, challenges, learning, deliverables, and mentor interaction.
-- Support weekly progress reporting with automatic hour aggregation.
-- Collect final learning/outcome information and skill self-ratings.
-- Collect industry mentor evaluation via secure invite link.
-- Store documentary evidence (PDFs, photos) uploaded from phone.
-- Generate student-wise and aggregate evidence reports exportable as PDF.
-- Support **offline-first operation** — students can fill forms without internet; data syncs when connectivity returns.
+Admin is not a separate feature set — it is faculty with institution-wide data scope.
 
----
+## 5. Core Loop
 
-## 3. Users
+```
+Faculty configures questions
+        ↓
+Student opens app → sees today's questions → answers → attaches files → submits
+        ↓
+Submission lands as "pending" (= today's attendance)
+        ↓
+Faculty reviews → approves or declines (with note)
+        ↓
+Approved = day attended | Declined = student may resubmit
+```
 
-| Role | Platform | Primary Actions |
-|---|---|---|
-| Student | Mobile (iOS/Android) | Register, daily log, weekly report, final assessment, document upload |
-| Faculty Coordinator | Mobile + Web | Review students, approve, download reports |
-| Industry Mentor | Mobile or Web link | Verify attendance, review logs, submit evaluation |
-| Department/Admin | Web (mobile-accessible) | Manage users, orgs, settings, export evidence |
+## 6. Functional Requirements
 
----
+### 6.1 Questions Management (Faculty/Admin)
 
-## 4. Functional Scope
+- Create, edit, reorder, and soft-retire daily questions
+- Question types: text, long_text, number, choice
+- Department-scoped or institution-wide questions
+- Maximum 20 active questions at once
 
-### 4.1 Registration (Once)
-- Student personal and academic details
-- Organisation details and location
-- Internship domain (Software Development, Data Science/AI/ML, Cyber Security, Cloud Computing, Networking, Web Development, Business/Management, Other)
-- Mode: Offline / Online / Hybrid
-- Start and end dates, duration, working hours per day
-- Industry mentor details (name, designation, email/contact)
-- Faculty coordinator assignment
-- Upload: Offer/Confirmation Letter (PDF from phone gallery or camera scan)
-- Upload: Joining Proof (PDF/image)
+### 6.2 Daily Submission (Student)
 
-### 4.2 Daily Attendance
-- Internship date (auto-filled with today)
-- Attendance status: Present, Absent, Permission/Leave, Holiday, Weekly Off
-- Reporting time and leaving time (time picker)
-- Total hours (auto-calculated)
-- Attendance mode: Office / Online / Hybrid
-- Optional attendance proof upload (photo/screenshot)
-- Leave reason (if absent)
-- Mentor verification flag
+- One submission per student per day (enforced by unique constraint)
+- Student answers all active questions for their department
+- Can attach up to 5 files (PDF, JPG, PNG, HEIC; max 10 MB each)
+- Cannot back-date (today only, `SUBMISSION_BACKDATE_DAYS = 0`)
+- Can edit while status is pending (`ALLOW_EDIT_WHILE_PENDING = true`)
+- Resubmission allowed after decline (status resets to pending)
+- Approved submissions are locked
 
-> **Design rule (from source guide):** Proof upload must remain optional. Do not block submission if proof is unavailable.
+### 6.3 Review (Faculty/Admin)
 
-### 4.3 Daily Work Log
-- Activities performed (150–200 word text input with live counter)
-- Technologies/tools used (multi-tag input: Java, Python, SQL, Git, AWS, React, etc.)
-- Task assigned today
-- Task completion status: Yes / Partially / No
-- Key learning (max 100 words with live counter)
-- Problem/challenge faced
-- Solution/approach taken
-- Output/deliverable type: Code / Documentation / Design / Analysis / Testing / Presentation / Other
-- Evidence upload (photo/screenshot, optional, organisation-permitting)
-- Industry mentor interaction today: Yes / No
-- Mentor feedback/remarks (short text)
+- Review queue showing pending submissions
+- Individual approve/decline with optional note
+- Bulk approve/decline
+- Decline requires a reason (minimum 5 characters)
+- Faculty scoped to their department; admin sees all
 
-### 4.4 Weekly Review
-- Week number (auto-detected from internship dates)
-- Week start and end dates (auto-filled)
-- Days attended (auto-aggregated from attendance)
-- Total hours (auto-aggregated)
-- Major activities completed
-- Technologies/tools learned
-- Skills developed
-- Major task/assignment completed
-- Problems encountered
-- Solutions/approach
-- Key learning outcomes
-- Industry mentor feedback
-- Student self-assessment
-- Upload weekly PDF report
+### 6.4 Attendance
 
-### 4.5 Final Assessment (End of Internship)
-- Internship completed successfully? Yes / No
-- Total days attended and total hours (auto-filled)
-- Major project/task completed
-- Technologies mastered (tags)
-- Skills developed
-- Internship objectives achieved: Fully / Partially / No
-- Usefulness rating 1–5
-- Technical skill improvement (free text)
-- Employability improvement (free text)
-- Curriculum relationship (free text)
-- Real-world engineering exposure (free text)
-- Recommend organisation: Yes / No
-- Suggestions for programme improvement
+- No separate attendance table
+- A day is "attended" when an approved DailySubmission exists for that student on that date
+- Dashboard shows attendance metrics derived from submission history
 
-### 4.6 Learning & Outcome Ratings (Self-Assessment)
-Student rates themselves 1–5 on:
-- Technical knowledge
-- Problem solving
-- Communication
-- Teamwork
-- Time management
-- Professional discipline
-- Adaptability
-- Industry awareness
+### 6.5 Documents
 
-### 4.7 Mentor Evaluation
-- Ratings 1–5 on: Technical knowledge, Problem-solving, Communication, Teamwork, Professional behaviour, Punctuality/attendance, Ability to learn, Initiative, Quality of work, Overall performance
-- Major strengths (free text)
-- Areas for improvement (free text)
-- Overall remarks
-- Employment recommendation: Yes / No
-- Mentor name, designation, organisation, date
-- Digital confirmation (OTP or checkbox)
+- Two-phase upload: get signed URL → upload to storage → confirm with `/complete`
+- Private bucket with signed download URLs
+- Soft delete (mark row, then remove storage object)
+- Documents are reviewed as part of their submission (no per-file review state)
 
-### 4.8 Final Documents Upload
-Students upload from phone:
-- Internship Completion Certificate
-- Internship Report
-- Project Report (if applicable)
-- Offer/Joining Letter
-- Attendance Certificate/Statement
-- Mentor Evaluation (if separate doc)
-- Final Presentation (if applicable)
-- Any permitted evidence of project/work
+### 6.6 Student Profile
 
-> **Privacy rule:** Do not request confidential company information or proprietary source code.
+- Register number, name, programme, department, year, section, email, mobile
+- Editable by owner and admin only
 
----
+## 7. Non-Functional Requirements
 
-## 5. Mobile-Specific Features
+| Area | Requirement |
+|------|-------------|
+| Platform | iOS and Android via Expo; backend via Next.js on Vercel/similar |
+| Auth | Supabase Auth with local JWT verification |
+| Data store | PostgreSQL on Supabase |
+| File storage | Supabase Storage (private bucket) |
+| Performance | API responses < 500ms p95 |
+| Security | Row-level scoping in application code; RLS as defense-in-depth |
 
-### 5.1 Offline Support
-- Daily attendance and work logs can be drafted offline.
-- Offline queue shown in a "Pending Sync" banner.
-- Automatic sync when internet resumes.
-- Conflict resolution: last-write-wins per record with timestamp.
+## 8. Out of Scope
 
-### 5.2 Push Notifications
-- Missing daily submission reminder (configurable time).
-- Weekly report due reminder (Sunday evening).
-- Final assessment reminder (3 days before internship end).
-- Mentor evaluation request.
-- Faculty approval status update.
-- Document rejection/correction request.
-
-### 5.3 Document Capture
-- Camera integration: scan offer letters/certificates directly in-app.
-- PDF generation from image scans.
-- File picker for existing documents.
-- Progress bar for file uploads.
-
-### 5.4 Biometric / Device Auth
-- App lock with Face ID / Touch ID / device PIN.
-- Persistent login with secure token storage (Keychain/Keystore).
-
----
-
-## 6. Non-Goals
-
-- Do not require daily proof uploads when the organisation does not provide reliable proof.
-- Do not collect confidential company information or proprietary source code.
-- Do not replace an organisation's official attendance system.
-- Do not build a separate iOS and Android codebase — single React Native codebase only.
-
----
-
-## 7. Success Metrics
-
-- >95% student records complete before internship start.
-- Daily submission rate visible in faculty dashboard.
-- Attendance percentage and total hours calculated automatically (not manual entry).
-- Faculty can retrieve complete student evidence without manual spreadsheet consolidation.
-- Final evidence package can be exported by student, department, organisation, and internship period.
-- App installs and runs on iOS 15+ and Android 11+ from a single codebase.
-
----
-
-## 8. Source Basis
-
-This PRD is derived from the uploaded internship app guide (DOCX) and the original 11-document technical package. Mobile app architecture, offline sync, push notifications, and device auth are engineering proposals added during the mobile enhancement pass. Product flows map directly to the source guide's three-form recommendation: Registration → Daily Log → Final Assessment.
+- Offline sync / local SQLite database
+- Push notifications
+- Mentor role or external industry mentor features
+- Weekly reports, final assessments, skill ratings
+- Organisation/company records
+- Evidence export jobs
+- Web faculty portal (future)

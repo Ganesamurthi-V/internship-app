@@ -1,11 +1,11 @@
 /**
- * Faculty dashboard — 06_App_Flow §7, 12_Mobile_App_Spec §2.
+ * Faculty overview.
  *
- * The five summary cards named in the flow document, plus completion and cohort
- * attendance. Tapping "Missing Today's Log" drills into the student list filtered to
- * exactly that, which is the primary follow-up action the document describes.
+ * The pending-review count is the number that drives action, so it leads and doubles
+ * as the entry point to the queue.
  */
 
+import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import type { FacultyDashboard as FacultyDashboardData } from '@ims/shared-types';
@@ -19,22 +19,28 @@ import { colors, fontSize, spacing } from '@/constants/theme';
 export default function FacultyDashboardScreen() {
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
-  const { data, isRefetching, refetch, isLoading, error } = useDashboard();
+  const { data, isLoading, isRefetching, refetch, error } = useDashboard();
 
   const dashboard =
-    data?.value.role === 'faculty' || data?.value.role === 'admin'
-      ? (data.value.dashboard as FacultyDashboardData)
-      : null;
+    data && data.role !== 'student' ? (data.dashboard as FacultyDashboardData) : null;
 
-  if (isLoading && !dashboard) {
+  const [signingOut, setSigningOut] = useState(false);
+
+  const onSignOut = async (): Promise<void> => {
+    setSigningOut(true);
+    await logout();
+    router.replace('/(auth)/login');
+  };
+
+  if (isLoading) {
     return (
       <Screen>
-        <Text style={styles.muted}>Loading dashboard\u2026</Text>
+        <Text style={styles.muted}>Loading\u2026</Text>
       </Screen>
     );
   }
 
-  if (!dashboard) {
+  if (error) {
     return (
       <Screen>
         <Card title="Could not load the dashboard">
@@ -48,85 +54,149 @@ export default function FacultyDashboardScreen() {
     );
   }
 
+  if (!dashboard) {
+    return (
+      <Screen>
+        <Card title="Nothing to show">
+          <Text style={styles.muted}>
+            Could not load the faculty dashboard. This may happen if you are logged in as a
+            student. Try signing out and logging in with a faculty account.
+          </Text>
+          <View style={styles.spacer} />
+          <Button label="Try again" onPress={() => void refetch()} />
+          <View style={styles.spacer} />
+          <Button label="Sign out" variant="danger" onPress={() => void onSignOut()} loading={signingOut} />
+        </Card>
+      </Screen>
+    );
+  }
+
   return (
     <Screen refreshing={isRefetching} onRefresh={() => void refetch()}>
       <Text style={styles.greeting}>{user?.name ?? 'Faculty'}</Text>
+      <Text style={styles.subtitle}>
+        {dashboard.totalStudents} student{dashboard.totalStudents === 1 ? '' : 's'} in your scope
+      </Text>
 
-      {data?.cachedAt ? (
-        <Text style={styles.stale}>
-          Last synced {new Date(data.cachedAt).toLocaleString()}
-        </Text>
-      ) : null}
+      {/* ---- The work waiting ---- */}
+      <Card
+        title={
+          dashboard.pendingReview === 0
+            ? 'Nothing to review'
+            : `${dashboard.pendingReview} waiting for review`
+        }
+      >
+        {dashboard.pendingReview === 0 ? (
+          <Text style={styles.muted}>You are all caught up.</Text>
+        ) : (
+          <>
+            <Text style={styles.body}>
+              Students are waiting on a decision. Approving marks their day as attended.
+            </Text>
+            <View style={styles.spacer} />
+            <Button label="Open review queue" onPress={() => router.push('/(faculty)/review')} />
+          </>
+        )}
+      </Card>
+
+      {/* ---- Today at a glance ---- */}
+      <Card title="Today">
+        <View style={styles.factList}>
+          <Fact label="Submitted" value={dashboard.submittedToday} tone="neutral" />
+          <Fact label="Approved" value={dashboard.approvedToday} tone="success" />
+          <Fact label="Declined" value={dashboard.declinedToday} tone="danger" />
+          <Fact label="Not submitted" value={dashboard.missingToday} tone="warning" />
+        </View>
+        <View style={styles.spacer} />
+        <Button
+          label="See who has not submitted"
+          variant="secondary"
+          onPress={() => router.push('/(faculty)/students')}
+        />
+      </Card>
 
       <View style={styles.tileRow}>
         <SummaryCard
-          label="Active internships"
-          value={dashboard.activeInternships}
-          onPress={() => router.push('/(faculty)/students')}
+          label="Awaiting review"
+          value={dashboard.pendingReview}
+          tone={dashboard.pendingReview > 0 ? 'warning' : 'success'}
+          onPress={() => router.push('/(faculty)/review')}
         />
         <SummaryCard
-          label="Missing today's log"
-          value={dashboard.missingTodaysLog}
-          tone={dashboard.missingTodaysLog > 0 ? 'warning' : 'success'}
-          onPress={() => router.push('/(faculty)/students?missingToday=1')}
+          label="Active questions"
+          value={dashboard.activeQuestions}
+          tone={dashboard.activeQuestions === 0 ? 'danger' : 'neutral'}
+          onPress={() => router.push('/(faculty)/questions')}
         />
-        <SummaryCard
-          label="Pending approval"
-          value={dashboard.pendingApproval}
-          tone={dashboard.pendingApproval > 0 ? 'warning' : 'neutral'}
-          onPress={() => router.push('/(faculty)/students?status=pending')}
-        />
-        <SummaryCard
-          label="Documents to review"
-          value={dashboard.pendingDocumentReview}
-          tone={dashboard.pendingDocumentReview > 0 ? 'warning' : 'neutral'}
-        />
-        <SummaryCard
-          label="Evaluations outstanding"
-          value={dashboard.evaluationsOutstanding}
-          tone={dashboard.evaluationsOutstanding > 0 ? 'warning' : 'success'}
-        />
-        <SummaryCard label="Completed" value={dashboard.completedInternships} tone="success" />
       </View>
 
-      <Card title="Cohort attendance">
-        <Text style={styles.metric}>
-          {dashboard.averageAttendancePercentage !== null
-            ? `${dashboard.averageAttendancePercentage}%`
-            : '\u2014'}
-        </Text>
-        <Text style={styles.muted}>
-          Mean attendance across active internships in your scope.
-        </Text>
-      </Card>
+      {/* Without questions there is nothing for students to answer, which makes this
+          the most important thing on the screen when it happens. */}
+      {dashboard.activeQuestions === 0 ? (
+        <Card title="No questions set up">
+          <Text style={styles.body}>
+            Students cannot submit anything until at least one question exists. Add one to start
+            collecting attendance.
+          </Text>
+          <View style={styles.spacer} />
+          <Button label="Add a question" onPress={() => router.push('/(faculty)/questions')} />
+        </Card>
+      ) : null}
 
-      <Card title="Students">
-        <Text style={styles.muted}>
-          Search and filter your students, review their attendance and daily logs, and verify
-          documents.
-        </Text>
-        <View style={styles.spacer} />
-        <Button label="Open student list" onPress={() => router.push('/(faculty)/students')} />
-      </Card>
-
+      {/* ---- Sign out ---- */}
       <Card title="Account">
+        <Text style={styles.muted}>Signed in as {user?.email ?? 'faculty'}.</Text>
+        <View style={styles.spacer} />
         <Button
           label="Sign out"
           variant="danger"
-          onPress={() => {
-            void logout().then(() => router.replace('/(auth)/login'));
-          }}
+          onPress={() => void onSignOut()}
+          loading={signingOut}
         />
       </Card>
     </Screen>
   );
 }
 
+function Fact({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: 'neutral' | 'success' | 'warning' | 'danger';
+}) {
+  const toneColor =
+    tone === 'success'
+      ? colors.success
+      : tone === 'warning'
+        ? colors.warning
+        : tone === 'danger'
+          ? colors.danger
+          : colors.text;
+
+  return (
+    <View style={styles.fact}>
+      <Text style={styles.factLabel}>{label}</Text>
+      <Text style={[styles.factValue, { color: toneColor }]}>{value}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   greeting: { fontSize: fontSize.title, fontWeight: '800', color: colors.text },
-  stale: { fontSize: fontSize.caption, color: colors.textMuted, marginTop: 2, marginBottom: spacing.md },
-  tileRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.lg },
-  muted: { fontSize: fontSize.small, color: colors.textMuted, lineHeight: 20 },
-  metric: { fontSize: fontSize.display, fontWeight: '800', color: colors.primary },
+  subtitle: { fontSize: fontSize.small, color: colors.textMuted, marginBottom: spacing.md },
+  body: { fontSize: fontSize.body, color: colors.textMuted, lineHeight: 21 },
+  muted: { fontSize: fontSize.body, color: colors.textMuted },
   spacer: { height: spacing.md },
+  factList: { gap: spacing.sm },
+  fact: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  factLabel: { fontSize: fontSize.small, color: colors.textMuted },
+  factValue: {
+    fontSize: fontSize.subtitle,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  tileRow: { flexDirection: 'row', gap: spacing.md, flexWrap: 'wrap' },
 });

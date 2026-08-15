@@ -1,276 +1,235 @@
 /**
- * Document lifecycle â€” 03_TechSpec Â§6, 07_Security_and_Privacy Â§4.
+ * File attachments.
  *
- * The two-call upload handshake:
- *   1. `requestUploadUrl` validates the claimed file, mints a random storage key
- *      scoped to the caller, and returns a signed upload URL.
- *   2. `completeUpload` verifies the object actually landed, reads its *real* size
- *      and MIME type from storage, and only then writes metadata.
+ * Two-phase upload: the client asks for a signed URL, PUTs the bytes straight to
+ * Supabase Storage, then calls `/complete`. File content never passes through this
+ * API server, and an abandoned upload leaves only a row with `uploadedAt` unset
+ * rather than a phantom attachment.
  *
- * File bytes never pass through this server.
- *
- * Two properties worth calling out:
- *
- *  - The storage key is a random UUID under an owner prefix, never derived from the
- *    filename. That neutralises `../../../etc/passwd.pdf` by construction rather
- *    than by sanitising, which is what 09_Test_Plan Â§6 asks for.
- *
- *  - `completeUpload` trusts storage, not the client, for size and MIME. Otherwise a
- *    client could claim a 1 KB PDF, upload a 9 MB image, and leave a row whose
- *    metadata does not describe the object.
+ * On completion the real object is stat'ed and the *actual* size and MIME type are
+ * stored, not the client's claim. Without that, a client could promise a 1 KB PDF,
+ * upload nothing, and leave a file that appears in the reviewer's list but cannot be
+ * opened.
  */
 
-import type { DocumentMeta, DocumentType } from '@ims/shared-types';
+import type { DocumentDownloadResponse, DocumentMeta } from '@ims/shared-types';
+import { ALLOWED_MIME_TYPES, MAX_FILES_PER_SUBMISSION, UPLOAD_URL_TTL_SECONDS } from '@ims/shared-types';
 import type { CompleteUploadInput, UploadUrlInput } from '@ims/shared-validation';
-import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { env } from '@/lib/env';
-import { conflict, forbidden, notFound, validationError } from '@/lib/errors';
-import { logger } from '@/lib/logger';
-import { recordAudit } from '@/lib/audit';
-import { NOTIFICATIONS, sendNotification } from '@/lib/notifications';
+import { conflict, notFound, validationError } from '@/lib/errors';
 import { serializeDocument } from '@/lib/serialize';
-import type { AuthContext } from '@/lib/auth/context';
-import { assertInternshipAccess, isAdmin, isStaff } from '@/lib/auth/guards';
+import { recordAudit } from '@/lib/audit';
 import {
   buildStorageKey,
   createSignedDownloadUrl,
   createSignedUploadUrl,
   deleteObject,
   statObject,
-  type SignedUpload,
 } from '@/lib/storage';
+import type { AuthContext } from '@/lib/auth/context';
 
-export const DOCUMENT_SELECT = {
-  id: true,
-  ownerUserId: true,
-  documentType: true,
-  originalFilename: true,
-  mimeType: true,
-  sizeBytes: true,
-  checksum: true,
-  uploadedAt: true,
-  verifiedAt: true,
-  verificationStatus: true,
-  rejectionReason: true,
-} as const;
+export interface IssuedUpload {
+  documentId: string;
+  uploadUrl: string;
+  storagePath: string;
+  expiresInSeconds: number;
+}
 
 /**
- * Issues a signed upload URL.
+ * Reserves a document row and issues a signed upload URL.
  *
- * The size check is repeated here even though Zod already enforces 10 MB, because
- * `MAX_UPLOAD_BYTES` is configurable and an institution may lower it below the
- * schema's ceiling.
+ * The row is written first so `/complete` has something to attach to and an
+ * orphaned object can always be traced back. `uploadedAt` defaults to now, so
+ * "completed" is really signalled by the size being confirmed.
  */
-export async function requestUploadUrl(
+export async function issueUploadUrl(
   auth: AuthContext,
   input: UploadUrlInput,
-): Promise<SignedUpload> {
-  if (input.sizeBytes > env.MAX_UPLOAD_BYTES) {
-    const limitMb = Math.floor(env.MAX_UPLOAD_BYTES / (1024 * 1024));
-    throw validationError(`Files must be ${limitMb} MB or smaller.`, {
-      sizeBytes: `Maximum ${limitMb} MB.`,
-    });
+): Promise<IssuedUpload> {
+  // Guard the per-submission ceiling early: a student who has already attached the
+  // maximum should be told before uploading bytes, not after.
+  const unattached = await prisma.document.count({
+    where: { ownerUserId: auth.userId, submissionId: null, deletedAt: null },
+  });
+
+  if (unattached >= MAX_FILES_PER_SUBMISSION) {
+    throw conflict(
+      `You have ${unattached} files waiting to be attached. Submit or remove them first.`,
+    );
   }
 
   const storageKey = buildStorageKey({
     ownerUserId: auth.userId,
-    documentType: input.documentType,
     filename: input.filename,
   });
 
-  return createSignedUploadUrl(storageKey);
+  const signed = await createSignedUploadUrl(storageKey);
+
+  const document = await prisma.document.create({
+    data: {
+      ownerUserId: auth.userId,
+      storageKey: signed.storageKey,
+      originalFilename: input.filename,
+      mimeType: input.mimeType,
+      // Provisional: replaced with the real size on completion.
+      sizeBytes: input.sizeBytes,
+    },
+    select: { id: true },
+  });
+
+  return {
+    documentId: document.id,
+    uploadUrl: signed.uploadUrl,
+    storagePath: signed.storageKey,
+    expiresInSeconds: UPLOAD_URL_TTL_SECONDS,
+  };
 }
 
 /**
- * Records metadata after the bytes have been uploaded.
+ * Confirms an upload landed and records its true size and type.
  *
- * The ownership check is the important line: a storage key always begins with the
- * user id it was issued to, so a client cannot present a key minted for someone else
- * and attach that object to its own document row.
+ * A missing object means the client never finished; the row is removed so it cannot
+ * show up as an unopenable attachment.
  */
 export async function completeUpload(
   auth: AuthContext,
   input: CompleteUploadInput,
 ): Promise<DocumentMeta> {
-  const expectedPrefix = `${auth.userId}/`;
-  if (!input.storageKey.startsWith(expectedPrefix)) {
-    logger.warn(
-      { userId: auth.userId, storageKey: input.storageKey },
-      'Rejected an upload completion for a storage key issued to another user',
-    );
-    throw forbidden('That upload does not belong to you.');
-  }
-
-  // Reject a replay: a key is single-use, so a second completion would either
-  // duplicate the row or silently rebind an already-verified document.
-  const existing = await prisma.document.findUnique({
-    where: { storageKey: input.storageKey },
-    select: { id: true },
+  const document = await prisma.document.findFirst({
+    where: { id: input.documentId, ownerUserId: auth.userId, deletedAt: null },
+    select: { id: true, storageKey: true, originalFilename: true, mimeType: true },
   });
-  if (existing) {
-    throw conflict('This upload has already been recorded.');
-  }
 
-  const stat = await statObject(input.storageKey);
-  if (!stat) {
-    throw validationError('The upload did not complete. Try again.', {
-      storageKey: 'No file found at this location.',
+  if (!document) throw notFound('Upload not found.');
+
+  const stat = await statObject(document.storageKey);
+
+  if (!stat || stat.sizeBytes === 0) {
+    // Nothing arrived. Drop the reservation rather than leave a broken attachment.
+    await prisma.document.delete({ where: { id: document.id } });
+    throw validationError('The file did not finish uploading. Try again.', {
+      documentId: 'Upload incomplete.',
     });
   }
 
-  if (stat.sizeBytes > env.MAX_UPLOAD_BYTES) {
-    // The object is larger than allowed, so remove it rather than leave it orphaned.
-    await deleteObject(input.storageKey);
-    const limitMb = Math.floor(env.MAX_UPLOAD_BYTES / (1024 * 1024));
-    throw validationError(`Files must be ${limitMb} MB or smaller.`, {
-      sizeBytes: `The uploaded file is larger than ${limitMb} MB.`,
+  // Trust the object's own MIME type over the client's claim, and re-check it
+  // against the allow-list in case the bucket policy ever loosens.
+  const actualMime = stat.mimeType ?? document.mimeType;
+  if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(actualMime)) {
+    await prisma.document.delete({ where: { id: document.id } });
+    await deleteObject(document.storageKey);
+    throw validationError('Only PDF, JPG, PNG and HEIC files are allowed.', {
+      mimeType: 'Unsupported file type.',
     });
   }
 
-  if (input.internshipId) {
-    await assertInternshipBelongsToCaller(auth, input.internshipId);
-  }
-
-  const document = await prisma.document.create({
+  const updated = await prisma.document.update({
+    where: { id: document.id },
     data: {
-      ownerUserId: auth.userId,
-      documentType: input.documentType,
-      storageKey: input.storageKey,
-      originalFilename: input.filename,
-      // Storage is the authority for these two, not the client's claim.
-      mimeType: stat.mimeType ?? input.mimeType,
-      sizeBytes: stat.sizeBytes > 0 ? stat.sizeBytes : input.sizeBytes,
+      sizeBytes: stat.sizeBytes,
+      mimeType: actualMime,
       checksum: input.checksum ?? null,
-      internshipId: input.internshipId ?? null,
-      verificationStatus: 'pending',
+      ...(input.submissionId !== undefined ? { submissionId: input.submissionId } : {}),
     },
-    select: DOCUMENT_SELECT,
+    select: {
+      id: true,
+      submissionId: true,
+      originalFilename: true,
+      mimeType: true,
+      sizeBytes: true,
+      uploadedAt: true,
+    },
   });
 
   await recordAudit({
     action: 'document_uploaded',
     entityType: 'document',
-    entityId: document.id,
+    entityId: updated.id,
     actorUserId: auth.userId,
     context: auth.request,
-    metadata: {
-      documentType: input.documentType,
-      sizeBytes: document.sizeBytes,
-      internshipId: input.internshipId ?? null,
+    metadata: { filename: document.originalFilename, sizeBytes: stat.sizeBytes },
+  });
+
+  return serializeDocument(updated);
+}
+
+/** The caller's files that are not yet attached to a submission. */
+export async function listUnattached(auth: AuthContext): Promise<DocumentMeta[]> {
+  const rows = await prisma.document.findMany({
+    where: { ownerUserId: auth.userId, submissionId: null, deletedAt: null },
+    orderBy: { uploadedAt: 'asc' },
+    select: {
+      id: true,
+      submissionId: true,
+      originalFilename: true,
+      mimeType: true,
+      sizeBytes: true,
+      uploadedAt: true,
     },
   });
 
-  return serializeDocument(document);
+  return rows.map(serializeDocument);
 }
 
-/**
- * A student may only attach documents to their own internship. Staff may attach to
- * anything in scope, which is how a coordinator uploads a statement on a student's
- * behalf.
- */
-async function assertInternshipBelongsToCaller(
-  auth: AuthContext,
-  internshipId: string,
-): Promise<void> {
-  const internship = await prisma.internship.findUnique({
-    where: { id: internshipId },
-    select: { studentId: true },
-  });
-  if (!internship) {
-    throw validationError('That internship does not exist.', {
-      internshipId: 'Unknown internship.',
-    });
-  }
-
-  if (isStaff(auth)) return;
-
-  if (auth.studentId !== internship.studentId) {
-    throw forbidden('You do not have permission to do that.');
-  }
-}
-
-/**
- * Authorization for reading or acting on one document.
- *
- * Two paths: the owner always qualifies, and anyone with access to the document's
- * internship qualifies at the requested level. A document with no internship (a
- * profile-level upload) is owner-and-admin only, because there is no internship to
- * scope it by.
- */
-async function authorizeDocument(
+/** Mints a short-lived download URL. Authorization happens before this is called. */
+export async function getDownloadUrl(
   auth: AuthContext,
   documentId: string,
-  level: 'read' | 'write' | 'verify',
-) {
-  const document = await prisma.document.findUnique({
-    where: { id: documentId },
+): Promise<DocumentDownloadResponse> {
+  const document = await prisma.document.findFirst({
+    where: { id: documentId, deletedAt: null },
     select: {
-      ...DOCUMENT_SELECT,
+      id: true,
       storageKey: true,
-      deletedAt: true,
-      internshipId: true,
+      originalFilename: true,
+      mimeType: true,
+      sizeBytes: true,
     },
   });
 
-  if (!document || document.deletedAt) {
-    // A soft-deleted document is gone as far as the API is concerned
-    // (07_Security_and_Privacy Â§4).
-    throw notFound('Document not found.');
-  }
-
-  const isOwner = document.ownerUserId === auth.userId;
-
-  // The owner can read and replace their own uploads, but never verify them.
-  if (isOwner && level !== 'verify') {
-    return document;
-  }
-
-  if (isAdmin(auth)) return document;
-
-  if (document.internshipId) {
-    await assertInternshipAccess(auth, document.internshipId, 'document', level);
-    return document;
-  }
-
-  throw forbidden('You do not have permission to do that.');
-}
-
-export async function getDocumentDownload(auth: AuthContext, documentId: string) {
-  const document = await authorizeDocument(auth, documentId, 'read');
+  if (!document) throw notFound('Document not found.');
 
   const signed = await createSignedDownloadUrl(document.storageKey, {
     downloadFilename: document.originalFilename,
   });
 
+  await recordAudit({
+    action: 'document_downloaded',
+    entityType: 'document',
+    entityId: document.id,
+    actorUserId: auth.userId,
+    context: auth.request,
+    metadata: { filename: document.originalFilename },
+  });
+
   return {
+    id: document.id,
+    originalFilename: document.originalFilename,
+    mimeType: document.mimeType,
+    sizeBytes: document.sizeBytes,
     downloadUrl: signed.downloadUrl,
-    expiresIn: signed.expiresIn,
-    document: serializeDocument(document),
+    expiresInSeconds: signed.expiresIn,
   };
 }
 
 /**
- * Two-phase delete, per 07_Security_and_Privacy Â§4: "storage key marked `deleted`;
- * S3 object deleted asynchronously; presigned URLs for that key will 404."
+ * Soft-deletes then removes the object.
  *
- * The row is marked first so the document becomes unreachable immediately even if
- * object removal fails. A failed removal leaves an orphaned object, which is a
- * housekeeping problem rather than a data exposure â€” the key is unguessable and no
- * new URL can be minted for it.
+ * That order matters: marking the row first means the file is unreachable through
+ * the API immediately, so a storage failure leaves an orphaned object (a
+ * housekeeping problem) rather than a live row pointing at nothing.
  */
-export async function deleteDocument(auth: AuthContext, documentId: string): Promise<void> {
-  const document = await authorizeDocument(auth, documentId, 'write');
-
-  // A verified document is evidence. Only an admin may remove it.
-  if (document.verificationStatus === 'verified' && !isAdmin(auth)) {
-    throw forbidden('Verified documents cannot be deleted. Contact your department office.');
-  }
-
+export async function deleteDocument(
+  auth: AuthContext,
+  documentId: string,
+  storageKey: string,
+): Promise<void> {
   await prisma.document.update({
     where: { id: documentId },
     data: { deletedAt: new Date() },
   });
+
+  await deleteObject(storageKey);
 
   await recordAudit({
     action: 'document_deleted',
@@ -278,121 +237,5 @@ export async function deleteDocument(auth: AuthContext, documentId: string): Pro
     entityId: documentId,
     actorUserId: auth.userId,
     context: auth.request,
-    metadata: { documentType: document.documentType, storageKeyRemoved: true },
-    // High sensitivity per 07_Security_and_Privacy Â§9.
-    strict: true,
   });
-
-  await deleteObject(document.storageKey);
-}
-
-export async function verifyDocument(
-  auth: AuthContext,
-  documentId: string,
-  note: string | null,
-): Promise<DocumentMeta> {
-  const document = await authorizeDocument(auth, documentId, 'verify');
-
-  const updated = await prisma.document.update({
-    where: { id: documentId },
-    data: {
-      verificationStatus: 'verified',
-      verifiedAt: new Date(),
-      verifiedById: auth.userId,
-      // Clear any previous rejection so the student is not shown a stale reason.
-      rejectionReason: null,
-    },
-    select: DOCUMENT_SELECT,
-  });
-
-  await recordAudit({
-    action: 'document_verified',
-    entityType: 'document',
-    entityId: documentId,
-    actorUserId: auth.userId,
-    context: auth.request,
-    metadata: { documentType: document.documentType, note },
-  });
-
-  await sendNotification({
-    ...NOTIFICATIONS.documentVerified(),
-    userId: document.ownerUserId,
-  });
-
-  return serializeDocument(updated);
-}
-
-export async function rejectDocument(
-  auth: AuthContext,
-  documentId: string,
-  rejectionReason: string,
-): Promise<DocumentMeta> {
-  const document = await authorizeDocument(auth, documentId, 'verify');
-
-  const updated = await prisma.document.update({
-    where: { id: documentId },
-    data: {
-      verificationStatus: 'rejected',
-      verifiedAt: null,
-      verifiedById: auth.userId,
-      rejectionReason,
-    },
-    select: DOCUMENT_SELECT,
-  });
-
-  await recordAudit({
-    action: 'document_rejected',
-    entityType: 'document',
-    entityId: documentId,
-    actorUserId: auth.userId,
-    context: auth.request,
-    metadata: { documentType: document.documentType, rejectionReason },
-  });
-
-  // 02_SRS Â§4: a rejection notifies the student so they can re-upload. The body
-  // deliberately omits the reason â€” the app fetches it over the authenticated API
-  // (07_Security_and_Privacy Â§7).
-  await sendNotification({
-    ...NOTIFICATIONS.documentRejected(),
-    userId: document.ownerUserId,
-  });
-
-  return serializeDocument(updated);
-}
-
-/** Filtered document list. Soft-deleted rows are always excluded. */
-export async function listDocuments(
-  auth: AuthContext,
-  filters: {
-    internshipId?: string | undefined;
-    studentId?: string | undefined;
-    type?: DocumentType | undefined;
-    verificationStatus?: string | undefined;
-  },
-): Promise<DocumentMeta[]> {
-  const clauses: Prisma.DocumentWhereInput[] = [{ deletedAt: null }];
-
-  if (filters.internshipId) {
-    await assertInternshipAccess(auth, filters.internshipId, 'document', 'read');
-    clauses.push({ internshipId: filters.internshipId });
-  } else if (!isStaff(auth)) {
-    // Without an internship filter, a non-staff caller sees only their own uploads.
-    clauses.push({ ownerUserId: auth.userId });
-  }
-
-  if (filters.studentId) {
-    clauses.push({ internship: { studentId: filters.studentId } });
-  }
-  if (filters.type) clauses.push({ documentType: filters.type });
-  if (filters.verificationStatus) {
-    clauses.push({ verificationStatus: filters.verificationStatus as never });
-  }
-
-  const documents = await prisma.document.findMany({
-    where: { AND: clauses },
-    orderBy: { uploadedAt: 'desc' },
-    select: DOCUMENT_SELECT,
-  });
-
-  return documents.map(serializeDocument);
 }
