@@ -12,7 +12,7 @@
 
 import type { NextRequest } from 'next/server';
 import type { FacultyCoordinatorOption, UserRole } from '@ims/shared-types';
-import { ok, withErrorHandling } from '@/lib/http';
+import { cachedOk, withErrorHandling } from '@/lib/http';
 import { requireAuth } from '@/lib/auth/context';
 import { prisma } from '@/lib/prisma';
 
@@ -41,7 +41,7 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
     role: member.role as UserRole,
   }));
 
-  return ok(options);
+  return cachedOk(options, 3600);
 });
 
 export const dynamic = 'force-dynamic';

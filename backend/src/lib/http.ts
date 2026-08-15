@@ -41,6 +41,24 @@ export function listResponse<T>(data: T[], pagination: Pagination): NextResponse
   return NextResponse.json({ data, pagination }, { status: 200, headers: BASE_HEADERS });
 }
 
+/**
+ * Response for data that rarely changes (departments, faculty coordinators).
+ * Uses `private` so intermediate proxies don't cache personal-adjacent data, but
+ * the client (HTTP layer + React Query) can skip the network round-trip until
+ * max-age expires.
+ */
+export function cachedOk<T>(data: T, maxAgeSeconds: number): NextResponse {
+  return NextResponse.json(
+    { data },
+    {
+      status: 200,
+      headers: {
+        'Cache-Control': `private, max-age=${maxAgeSeconds}, stale-while-revalidate=${maxAgeSeconds * 2}`,
+      },
+    },
+  );
+}
+
 export function buildPagination(total: number, page: number, pageSize: number): Pagination {
   return {
     page,

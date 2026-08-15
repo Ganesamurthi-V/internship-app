@@ -16,6 +16,7 @@
 
 import { useQuery, type UseQueryOptions } from '@tanstack/react-query';
 import type {
+  Attendance,
   AttendanceSummary,
   CurrentWeekSummary,
   Department,
@@ -103,9 +104,24 @@ export function useAttendanceSummary(internshipId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.student.attendanceSummary(internshipId ?? 'none'),
     enabled: Boolean(internshipId),
+    // Only changes when attendance is submitted — 10 minute staleTime avoids
+    // redundant refetches when navigating between tabs.
+    staleTime: 10 * 60 * 1000,
     queryFn: () =>
       fetchWithCache(`attendance:summary:${internshipId}`, () =>
         api.get<AttendanceSummary>('/attendance/summary', { internshipId }),
+      ),
+  });
+}
+
+export function useAttendanceList(internshipId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.student.attendanceAll(internshipId ?? 'none'),
+    enabled: Boolean(internshipId),
+    staleTime: 5 * 60 * 1000,
+    queryFn: () =>
+      fetchWithCache(`attendance:list:${internshipId}`, () =>
+        api.get<Attendance[]>('/attendance', { internshipId }),
       ),
   });
 }

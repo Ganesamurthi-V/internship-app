@@ -65,9 +65,12 @@ export default function StudentDashboardScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      // Reconcile local drafts so the checklist shows the tick immediately, even
+      // while offline. React Query's staleTime handles server refetch timing — we
+      // don't call refetch() here because that bypasses the stale guard and fires
+      // a network request on every single tab focus.
       void reconcileLocal();
-      void refetch();
-    }, [reconcileLocal, refetch]),
+    }, [reconcileLocal]),
   );
 
   useEffect(() => {

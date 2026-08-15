@@ -55,39 +55,42 @@ export async function getStudentDashboard(studentId: string): Promise<StudentDas
   });
   if (!student) throw notFound('Student profile not found.');
 
-  const internship = await prisma.internship.findFirst({
-    where: { studentId },
-    orderBy: { createdAt: 'desc' },
-    select: {
-      id: true,
-      studentId: true,
-      organisationId: true,
-      mentorId: true,
-      facultyCoordinatorId: true,
-      domain: true,
-      mode: true,
-      startDate: true,
-      endDate: true,
-      durationDays: true,
-      workingHoursPerDay: true,
-      status: true,
-      approvedById: true,
-      approvedAt: true,
-      rejectionReason: true,
-      createdAt: true,
-      updatedAt: true,
-      organisation: {
-        select: { id: true, name: true, location: true, createdAt: true, updatedAt: true },
+  // Parallelize: internship lookup and notification count both depend on the student
+  // but not on each other. This saves one DB round-trip.
+  const [internship, unreadNotificationCount] = await Promise.all([
+    prisma.internship.findFirst({
+      where: { studentId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        studentId: true,
+        organisationId: true,
+        mentorId: true,
+        facultyCoordinatorId: true,
+        domain: true,
+        mode: true,
+        startDate: true,
+        endDate: true,
+        durationDays: true,
+        workingHoursPerDay: true,
+        status: true,
+        approvedById: true,
+        approvedAt: true,
+        rejectionReason: true,
+        createdAt: true,
+        updatedAt: true,
+        organisation: {
+          select: { id: true, name: true, location: true, createdAt: true, updatedAt: true },
+        },
+        finalAssessment: { select: { submittedAt: true, facultyUnlockedAt: true } },
       },
-      finalAssessment: { select: { submittedAt: true, facultyUnlockedAt: true } },
-    },
-  });
+    }),
+    prisma.notificationLog.count({
+      where: { userId: student.userId, readAt: null },
+    }),
+  ]);
 
   const currentDate = today();
-
-  const unreadNotificationCount = await prisma.notificationLog.count({
-    where: { userId: student.userId, readAt: null },
-  });
 
   if (!internship) {
     // First-run state: no internship yet, so the dashboard renders the
@@ -109,7 +112,7 @@ export async function getStudentDashboard(studentId: string): Promise<StudentDas
   const endDate = toDateOnly(internship.endDate);
   const dateColumn = toDateColumn(currentDate);
 
-  const [attendanceToday, workLogToday, attendanceSummary, pendingDocumentCount] =
+  const [attendanceToday, workLogToday, attendanceSummary, pendingDocumentCount, currentWeek] =
     await Promise.all([
       prisma.attendance.findFirst({
         where: { internshipId: internship.id, attendanceDate: dateColumn },
@@ -127,9 +130,8 @@ export async function getStudentDashboard(studentId: string): Promise<StudentDas
           deletedAt: null,
         },
       }),
+      resolveCurrentWeekCard(internship.id, startDate, endDate, currentDate),
     ]);
-
-  const currentWeek = await resolveCurrentWeekCard(internship.id, startDate, endDate, currentDate);
 
   const facultyUnlocked = internship.finalAssessment?.facultyUnlockedAt !== null &&
     internship.finalAssessment?.facultyUnlockedAt !== undefined;

@@ -138,6 +138,14 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       // Signing out locally is still a sign-out.
     }
 
+    // Clear the in-memory token cache so a stale JWT is never reused.
+    try {
+      const { clearTokenCache } = await import('@/lib/supabase');
+      clearTokenCache();
+    } catch {
+      // Non-critical.
+    }
+
     try {
       // Drafts belong to the signed-in student; the next user must not see them.
       const { clearLocalData } = await import('@/lib/db/database');

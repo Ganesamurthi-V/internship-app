@@ -5,7 +5,7 @@
 
 import type { NextRequest } from 'next/server';
 import { createDepartmentSchema } from '@ims/shared-validation';
-import { created, ok, parseJson, withErrorHandling } from '@/lib/http';
+import { cachedOk, created, ok, parseJson, withErrorHandling } from '@/lib/http';
 import { requireAuth } from '@/lib/auth/context';
 import { requireRole } from '@/lib/auth/guards';
 import { prisma } from '@/lib/prisma';
@@ -19,8 +19,8 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
   await requireAuth(request);
 
   const departments = await prisma.department.findMany({ orderBy: { name: 'asc' } });
-  // Small, bounded reference list — no pagination envelope needed.
-  return ok(departments.map(serializeDepartment));
+  // Small, bounded reference list — departments change at most once a semester.
+  return cachedOk(departments.map(serializeDepartment), 3600);
 });
 
 export const POST = withErrorHandling(async (request: NextRequest) => {

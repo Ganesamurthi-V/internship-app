@@ -25,6 +25,8 @@
     "@prisma/client": "6.2.1",
     "@supabase/supabase-js": "2.48.1",
     "next": "15.5.23",
+    "jose": "6.0.11",
+    "lru-cache": "11.0.2",
     "pdfkit": "0.16.0",
     "pino": "9.6.0",
     "react": "19.2.3",

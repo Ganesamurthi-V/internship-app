@@ -1,13 +1,10 @@
 /**
  * Attendance history — 12_Mobile_App_Spec §2.
  *
- * The spec calls for a calendar heatmap plus a list. This renders the list with a
- * per-status colour bar, which carries the same information; the heatmap grid is listed
- * as remaining work in the README rather than half-drawn here.
- *
  * Server records and unsynced local drafts are merged into one timeline, so a student
  * reviewing their history offline sees the days they recorded in airplane mode instead
- * of gaps.
+ * of gaps. Uses React Query (useAttendanceList) so the staleTime guard prevents
+ * redundant fetches on every tab focus.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -18,8 +15,7 @@ import { ATTENDANCE_STATUS_LABELS, type AttendanceStatus } from '@ims/shared-typ
 import { Screen } from '@/components/shared/Screen';
 import { Card } from '@/components/ui/Card';
 import { ProgressRing } from '@/components/ui/ProgressRing';
-import { api, ApiError } from '@/lib/api/client';
-import { useAttendanceSummary, useMyInternship } from '@/lib/api/hooks';
+import { useAttendanceList, useAttendanceSummary, useMyInternship } from '@/lib/api/hooks';
 import { attendanceDrafts } from '@/lib/db/database';
 import { colors, fontSize, radius, spacing } from '@/constants/theme';
 
@@ -46,69 +42,65 @@ export default function AttendanceHistoryScreen() {
   const internshipId = internshipData?.value?.internship?.id;
 
   const { data: summary } = useAttendanceSummary(internshipId);
+  const { data: attendanceData, isLoading, isRefetching, refetch } = useAttendanceList(internshipId);
 
   const [entries, setEntries] = useState<TimelineEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [offline, setOffline] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!internshipId) return;
-    setLoading(true);
+  /** Merges server records with local drafts. */
+  const mergeEntries = useCallback(
+    async (serverRecords: Attendance[] | undefined) => {
+      if (!internshipId) return;
 
-    // Local drafts first: they are always available and are the source of truth for
-    // anything not yet synced.
-    const drafts = await attendanceDrafts.listForInternship(internshipId);
-    const byDate = new Map<string, TimelineEntry>();
+      const drafts = await attendanceDrafts.listForInternship(internshipId);
+      const byDate = new Map<string, TimelineEntry>();
 
-    for (const draft of drafts) {
-      byDate.set(draft.attendance_date, {
-        date: draft.attendance_date,
-        status: draft.status as AttendanceStatus,
-        reportingTime: draft.reporting_time,
-        leavingTime: draft.leaving_time,
-        totalHours: null,
-        mentorVerified: false,
-        pendingSync: draft.sync_status !== 'synced',
-      });
-    }
-
-    try {
-      const records = await api.get<Attendance[]>('/attendance', { internshipId });
-      setOffline(false);
-
-      // Server records win for anything already synced — they carry computed hours and
-      // the mentor verification flag, which a local draft cannot know.
-      for (const record of records) {
-        const existing = byDate.get(record.date);
-        byDate.set(record.date, {
-          date: record.date,
-          status: record.status,
-          reportingTime: record.reportingTime,
-          leavingTime: record.leavingTime,
-          totalHours: record.totalHours,
-          mentorVerified: record.mentorVerified,
-          pendingSync: existing?.pendingSync ?? false,
+      // Local drafts first
+      for (const draft of drafts) {
+        byDate.set(draft.attendance_date, {
+          date: draft.attendance_date,
+          status: draft.status as AttendanceStatus,
+          reportingTime: draft.reporting_time,
+          leavingTime: draft.leaving_time,
+          totalHours: null,
+          mentorVerified: false,
+          pendingSync: draft.sync_status !== 'synced',
         });
       }
-    } catch (error) {
-      if (error instanceof ApiError && error.isNetworkError) {
-        setOffline(true);
+
+      // Server records overlay — they carry computed hours and mentor verification
+      if (serverRecords) {
+        for (const record of serverRecords) {
+          const existing = byDate.get(record.date);
+          byDate.set(record.date, {
+            date: record.date,
+            status: record.status,
+            reportingTime: record.reportingTime,
+            leavingTime: record.leavingTime,
+            totalHours: record.totalHours,
+            mentorVerified: record.mentorVerified,
+            pendingSync: existing?.pendingSync ?? false,
+          });
+        }
       }
-    }
 
-    setEntries([...byDate.values()].sort((a, b) => b.date.localeCompare(a.date)));
-    setLoading(false);
-  }, [internshipId]);
+      setEntries([...byDate.values()].sort((a, b) => b.date.localeCompare(a.date)));
+    },
+    [internshipId],
+  );
 
+  // Merge whenever server data changes
   useEffect(() => {
-    void load();
-  }, [load]);
+    void mergeEntries(attendanceData?.value);
+  }, [attendanceData, mergeEntries]);
 
+  // Re-merge local drafts on focus (a new attendance may have been saved locally)
   useFocusEffect(
     useCallback(() => {
-      void load();
-    }, [load]),
+      void mergeEntries(attendanceData?.value);
+    }, [attendanceData, mergeEntries]),
   );
+
+  const offline = attendanceData?.cachedAt != null;
 
   return (
     <Screen scroll={false} padded={false}>
@@ -116,8 +108,8 @@ export default function AttendanceHistoryScreen() {
         data={entries}
         keyExtractor={(item) => item.date}
         contentContainerStyle={styles.list}
-        refreshing={loading}
-        onRefresh={() => void load()}
+        refreshing={isRefetching}
+        onRefresh={() => void refetch()}
         ListHeaderComponent={
           <View style={styles.header}>
             {summary ? (
@@ -145,7 +137,7 @@ export default function AttendanceHistoryScreen() {
           </View>
         }
         ListEmptyComponent={
-          loading ? null : (
+          isLoading ? null : (
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>No attendance yet</Text>
               <Text style={styles.emptyBody}>

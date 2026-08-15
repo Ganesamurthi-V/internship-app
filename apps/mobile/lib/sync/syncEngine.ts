@@ -36,6 +36,7 @@ import {
   type WorkLogDraftInput,
 } from '@/lib/db/database';
 import type { AttendanceDraftRow, WorkLogDraftRow } from '@/lib/db/schema';
+import { queryKeys } from '@/lib/api/queryKeys';
 
 export interface SyncOutcome {
   attempted: number;
@@ -193,6 +194,19 @@ class SyncEngine {
       this.consecutiveFailures = 0;
 
       await this.refreshPendingCount();
+
+      // Invalidate React Query cache so screens show the confirmed server data
+      // instead of holding onto stale pre-sync state.
+      if (outcome.synced > 0 || outcome.duplicates > 0) {
+        try {
+          const { queryClient } = await import('@/app/_layout');
+          void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+          void queryClient.invalidateQueries({ queryKey: ['attendance'] });
+          void queryClient.invalidateQueries({ queryKey: ['work-log'] });
+        } catch {
+          // queryClient not yet initialised — safe to ignore, next mount will fetch.
+        }
+      }
 
       // More drafts than one batch could carry: go again immediately.
       if (

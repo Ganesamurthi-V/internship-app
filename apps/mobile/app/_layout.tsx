@@ -21,10 +21,18 @@ import { useAuthStore } from '@/stores/authStore';
 
 void SplashScreen.preventAutoHideAsync();
 
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 30_000,
+      // Data changes at most a few times per day (attendance, work log). 5 minutes
+      // means navigating between tabs serves from cache instantly rather than
+      // firing a network request on every mount/focus.
+      staleTime: 5 * 60 * 1000, // 5 minutes
+
+      // Keep unmounted query data in memory for 30 minutes so returning to a
+      // previously visited screen is instant without a loading spinner.
+      gcTime: 30 * 60 * 1000, // 30 minutes
+
       // 4xx will not succeed on a retry; only retry transport failures.
       retry: (failureCount, error: unknown) => {
         const status = (error as { status?: number } | null)?.status ?? 0;
