@@ -81,9 +81,12 @@ export function getSupabase(): SupabaseClient {
  * Current access token for bearer-header API calls.
  *
  * Cached in memory with a safety margin before JWT expiry so multiple concurrent
- * API requests (e.g. dashboard + attendance + work-log on mount) don't each call
- * getSession() individually. The SDK still handles refresh under the hood when the
- * token actually expires.
+ * API requests (e.g. dashboard + today form on mount) don't each call getSession()
+ * individually. The SDK still handles refresh under the hood when the token
+ * actually expires.
+ *
+ * The cache is invalidated when Supabase fires a TOKEN_REFRESHED event, so a
+ * silent refresh doesn't leave us holding a stale token.
  */
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
@@ -115,3 +118,17 @@ export async function getAccessToken(): Promise<string | null> {
 export function clearTokenCache(): void {
   cachedToken = null;
 }
+
+// Listen for token refresh events so the cache doesn't serve a stale token
+// after Supabase silently refreshes in the background.
+setTimeout(() => {
+  try {
+    getSupabase().auth.onAuthStateChange((event) => {
+      if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_OUT') {
+        cachedToken = null;
+      }
+    });
+  } catch {
+    // Supabase not configured yet; getSupabase() will throw later with a clear message.
+  }
+}, 0);

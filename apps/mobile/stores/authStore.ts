@@ -151,6 +151,15 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       // Non-critical.
     }
 
+    // Clear the React Query cache so the next user doesn't see stale data from
+    // the previous account (e.g. a student's dashboard showing for a faculty login).
+    try {
+      const { queryClient } = await import('@/app/_layout');
+      queryClient.clear();
+    } catch {
+      // Non-critical.
+    }
+
     set({ user: null, isAuthenticated: false, error: null });
   },
 
@@ -178,6 +187,11 @@ setTimeout(() => {
     getSupabase().auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') {
         useAuthStore.setState({ user: null, isAuthenticated: false });
+        // Also clear the query cache so stale personal data doesn't linger if the
+        // session expired silently (not through our logout() flow).
+        import('@/app/_layout')
+          .then(({ queryClient }) => queryClient.clear())
+          .catch(() => {});
       }
     });
   } catch {

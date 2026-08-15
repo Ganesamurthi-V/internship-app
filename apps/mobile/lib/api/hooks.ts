@@ -76,11 +76,10 @@ export function useSubmitAnswers() {
     }) => api.post<DailySubmissionDetail>('/submissions', input),
 
     onSuccess: () => {
-      // The submission changes today's form, the dashboard counters, the history
-      // list and the staged-file list. Invalidate by prefix rather than naming each.
+      // The submission changes today's form, the dashboard counters, and the
+      // submission list. Invalidate by prefix rather than naming each.
       void queryClient.invalidateQueries({ queryKey: queryKeys.submissions.all });
       void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.documents.unattached });
     },
   });
 }
