@@ -78,6 +78,38 @@ export interface ResetPasswordRequest {
   newPassword: string;
 }
 
+/** Student login uses register number + mobile instead of email + password. */
+export interface StudentLoginRequest {
+  registerNumber: string;
+  mobile: string;
+}
+
+/** Full student registration with internship details. */
+export interface StudentRegisterRequest {
+  name: string;
+  registerNumber: string;
+  programme: string;
+  departmentId?: string | null;
+  year?: number | null;
+  section?: string | null;
+  studentEmail: string;
+  mobile: string;
+  organisationName?: string | null;
+  organisationLocation?: string | null;
+  internshipDomain?: string | null;
+  internshipMode?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  durationDays?: number | null;
+  workingHoursPerDay?: number | null;
+  mentorName?: string | null;
+  mentorDesignation?: string | null;
+  mentorContact?: string | null;
+  facultyCoordinator?: string | null;
+  offerLetterDocId?: string | null;
+  joiningLetterDocId?: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Questions
 // ---------------------------------------------------------------------------

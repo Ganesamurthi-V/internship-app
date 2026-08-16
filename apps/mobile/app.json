@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1e3a5f"
+      "backgroundColor": "#4d5cc9"
     },
     "ios": {
       "bundleIdentifier": "edu.smvec.internship",
@@ -26,7 +26,7 @@
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png",
-        "backgroundColor": "#1e3a5f"
+        "backgroundColor": "#4d5cc9"
       },
       "permissions": [],
       "edgeToEdgeEnabled": true

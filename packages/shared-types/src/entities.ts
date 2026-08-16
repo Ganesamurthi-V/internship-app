@@ -13,6 +13,8 @@
 
 import type {
   ClientPlatform,
+  InternshipDomain,
+  InternshipMode,
   QuestionType,
   SubmissionStatus,
   UserRole,
@@ -65,11 +67,22 @@ export interface Student {
   year: number | null;
   section: string | null;
   studentEmail: string;
-  /**
-   * Omitted unless the caller is the student themselves or a reviewer. Contact
-   * details are the one field on this record that is not needed to do the job.
-   */
-  mobile?: string | null;
+  mobile: string;
+
+  // Internship details
+  organisationName: string | null;
+  organisationLocation: string | null;
+  internshipDomain: InternshipDomain | null;
+  internshipMode: InternshipMode | null;
+  startDate: DateOnly | null;
+  endDate: DateOnly | null;
+  durationDays: number | null;
+  workingHoursPerDay: number | null;
+  mentorName: string | null;
+  mentorDesignation: string | null;
+  mentorContact: string | null;
+  facultyCoordinator: string | null;
+
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }

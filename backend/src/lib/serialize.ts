@@ -119,17 +119,24 @@ type StudentRow = {
   year: number | null;
   section: string | null;
   studentEmail: string;
-  mobile: string | null;
+  mobile: string;
+  organisationName?: string | null;
+  organisationLocation?: string | null;
+  internshipDomain?: string | null;
+  internshipMode?: string | null;
+  startDate?: Date | null;
+  endDate?: Date | null;
+  durationDays?: number | null;
+  workingHoursPerDay?: number | null;
+  mentorName?: string | null;
+  mentorDesignation?: string | null;
+  mentorContact?: string | null;
+  facultyCoordinator?: string | null;
   createdAt: Date;
   updatedAt: Date;
   department?: DepartmentRow | null;
 };
 
-/**
- * `includeContactDetails` decides whether the mobile number is present at all,
- * rather than nulled. An absent field cannot be mistaken for "this student has no
- * number on file".
- */
 export function serializeStudent(
   row: StudentRow,
   options: { includeContactDetails: boolean },
@@ -145,7 +152,19 @@ export function serializeStudent(
     year: row.year,
     section: row.section,
     studentEmail: row.studentEmail,
-    ...(options.includeContactDetails ? { mobile: row.mobile } : {}),
+    mobile: options.includeContactDetails ? row.mobile : '***',
+    organisationName: row.organisationName ?? null,
+    organisationLocation: row.organisationLocation ?? null,
+    internshipDomain: (row.internshipDomain as Student['internshipDomain']) ?? null,
+    internshipMode: (row.internshipMode as Student['internshipMode']) ?? null,
+    startDate: row.startDate ? toDateOnly(row.startDate) : null,
+    endDate: row.endDate ? toDateOnly(row.endDate) : null,
+    durationDays: row.durationDays ?? null,
+    workingHoursPerDay: row.workingHoursPerDay ?? null,
+    mentorName: row.mentorName ?? null,
+    mentorDesignation: row.mentorDesignation ?? null,
+    mentorContact: row.mentorContact ?? null,
+    facultyCoordinator: row.facultyCoordinator ?? null,
     createdAt: toRequiredIso(row.createdAt),
     updatedAt: toRequiredIso(row.updatedAt),
   };

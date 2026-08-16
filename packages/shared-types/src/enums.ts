@@ -89,6 +89,42 @@ export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Internship details (on student registration)
+// ---------------------------------------------------------------------------
+
+export const INTERNSHIP_DOMAINS = [
+  'software_development',
+  'data_science_ai_ml',
+  'cyber_security',
+  'cloud_computing',
+  'networking',
+  'web_development',
+  'business_management',
+  'other',
+] as const;
+export type InternshipDomain = (typeof INTERNSHIP_DOMAINS)[number];
+
+export const INTERNSHIP_DOMAIN_LABELS: Record<InternshipDomain, string> = {
+  software_development: 'Software Development',
+  data_science_ai_ml: 'Data Science / AI / ML',
+  cyber_security: 'Cyber Security',
+  cloud_computing: 'Cloud Computing',
+  networking: 'Networking',
+  web_development: 'Web Development',
+  business_management: 'Business / Management',
+  other: 'Other',
+};
+
+export const INTERNSHIP_MODES = ['offline', 'online', 'hybrid'] as const;
+export type InternshipMode = (typeof INTERNSHIP_MODES)[number];
+
+export const INTERNSHIP_MODE_LABELS: Record<InternshipMode, string> = {
+  offline: 'Offline',
+  online: 'Online',
+  hybrid: 'Hybrid',
+};
+
+// ---------------------------------------------------------------------------
 // API errors
 // ---------------------------------------------------------------------------
 

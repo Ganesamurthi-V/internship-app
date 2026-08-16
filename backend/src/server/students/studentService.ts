@@ -164,7 +164,7 @@ export async function updateStudentProfile(
       ...(input.programme !== undefined ? { programme: input.programme } : {}),
       ...(input.year !== undefined ? { year: input.year } : {}),
       ...(input.section !== undefined ? { section: input.section } : {}),
-      ...(input.mobile !== undefined ? { mobile: input.mobile } : {}),
+      ...(input.mobile !== undefined && input.mobile !== null ? { mobile: input.mobile } : {}),
       ...(input.departmentId !== undefined ? { departmentId: input.departmentId } : {}),
       ...(input.studentEmail !== undefined ? { studentEmail: input.studentEmail } : {}),
     },

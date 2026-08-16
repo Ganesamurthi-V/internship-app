@@ -150,7 +150,29 @@ model Student {
   year         Int?
   section      String?
   studentEmail String  @map("student_email")
-  mobile       String?
+  mobile       String
+
+  // -------------------------------------------------------------------------
+  // Internship details — collected at registration
+  // -------------------------------------------------------------------------
+
+  organisationName     String? @map("organisation_name")
+  organisationLocation String? @map("organisation_location")
+  internshipDomain     String? @map("internship_domain")
+  internshipMode       String? @map("internship_mode")
+  startDate            DateTime? @map("start_date") @db.Date
+  endDate              DateTime? @map("end_date") @db.Date
+  durationDays         Int?    @map("duration_days")
+  workingHoursPerDay   Int?    @map("working_hours_per_day")
+
+  mentorName           String? @map("mentor_name")
+  mentorDesignation    String? @map("mentor_designation")
+  mentorContact        String? @map("mentor_contact")
+  facultyCoordinator   String? @map("faculty_coordinator")
+
+  /// Document IDs for uploaded offer/joining letters (stored as JSON array of UUIDs)
+  offerLetterDocId     String? @map("offer_letter_doc_id") @db.Uuid
+  joiningLetterDocId   String? @map("joining_letter_doc_id") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)

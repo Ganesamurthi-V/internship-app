@@ -1,313 +1,413 @@
 /**
- * Login screen.
+ * Login screen — tabbed layout with Student Portal and Faculty/Admin tabs.
  *
- * Signs in through the auth store, which is what every route guard reads. Calling
- * Supabase directly from here would leave the store empty and make the group
- * layouts bounce straight back to this screen.
+ * Both forms live on the same screen. The active tab determines which fields show:
+ *   - Student Portal: Register Number + Mobile Number
+ *   - Faculty/Admin: Email + Password
+ *
+ * Matches the reference layout: tab bar at top, form title + subtitle below,
+ * input fields with icons, and a single sign-in button.
  */
 
 import { useState } from 'react';
-import {
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router } from 'expo-router';
-import type { UserRole } from '@ims/shared-types';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import type { AuthenticatedUser } from '@ims/shared-types';
+import { Screen } from '@/components/shared/Screen';
+import { Button } from '@/components/ui/Button';
+import { api, ApiError } from '@/lib/api/client';
+import { getSupabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
-import { colors, fontSize, radius, spacing, touchTarget } from '@/constants/theme';
+import { colors, fontSize, radius, spacing } from '@/constants/theme';
 
-/** Maps a Supabase error message to something a student can act on. */
-function describeError(message: string): { title: string; detail: string } {
-  if (message.includes('Invalid login credentials')) {
-    return {
-      title: 'Email or password is incorrect.',
-      detail: 'Passwords are case-sensitive. Check both and try again.',
-    };
-  }
-  if (message.includes('Email not confirmed')) {
-    return {
-      title: 'Your email is not verified yet.',
-      detail: 'Check your inbox for the verification link.',
-    };
-  }
-  if (message.toLowerCase().includes('too many')) {
-    return { title: 'Too many attempts.', detail: 'Wait a minute, then try again.' };
-  }
-  if (message.toLowerCase().includes('network') || message.toLowerCase().includes('fetch')) {
-    return {
-      title: 'Cannot reach the server.',
-      detail: 'Check your internet connection and try again.',
-    };
-  }
-  if (message.includes('configuration missing')) {
-    return {
-      title: 'App is not configured.',
-      detail: 'Supabase keys are missing from apps/mobile/.env',
-    };
-  }
-  return { title: 'Sign in failed.', detail: message };
-}
+type Tab = 'student' | 'faculty';
 
-function routeForRole(role: UserRole): string {
-  switch (role) {
-    case 'faculty':
-    case 'admin':
-      return '/(faculty)/dashboard';
-    default:
-      return '/(student)/dashboard';
-  }
+interface StudentLoginResponse {
+  session: { accessToken: string; refreshToken: string; expiresAt: number };
+  user: AuthenticatedUser;
 }
 
 export default function LoginScreen() {
-  const login = useAuthStore((state) => state.login);
-  const isSigningIn = useAuthStore((state) => state.isSigningIn);
+  const [activeTab, setActiveTab] = useState<Tab>('student');
 
+  // Student fields
+  const [registerNumber, setRegisterNumber] = useState('');
+  const [mobile, setMobile] = useState('');
+
+  // Faculty fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<{ title: string; detail: string } | null>(null);
 
-  const onSubmit = async (): Promise<void> => {
-    if (!email.trim()) {
-      setError({ title: 'Enter your email address.', detail: '' });
-      return;
-    }
-    if (!password) {
-      setError({ title: 'Enter your password.', detail: '' });
-      return;
-    }
+  // Shared state
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-    setError(null);
+  const login = useAuthStore((state) => state.login);
 
+  const clearError = () => setError(null);
+
+  // ─── Student Login ───
+  const onStudentLogin = async (): Promise<void> => {
+    clearError();
+    if (!registerNumber.trim()) { setError('Enter your register number.'); return; }
+    if (!mobile.trim()) { setError('Enter your mobile number.'); return; }
+
+    setSubmitting(true);
     try {
-      // The store performs the sign-in and populates the state the guards read,
-      // then hands back the role so navigation does not race React's commit.
-      const role = await login(email, password);
-      router.replace(routeForRole(role) as never);
+      const response = await api.anonymous.post<StudentLoginResponse>('/auth/student-login', {
+        registerNumber: registerNumber.trim().toUpperCase(),
+        mobile: mobile.trim(),
+      });
+
+      await getSupabase().auth.setSession({
+        access_token: response.session.accessToken,
+        refresh_token: response.session.refreshToken,
+      });
+
+      useAuthStore.setState({
+        user: response.user,
+        isAuthenticated: true,
+        isSigningIn: false,
+        error: null,
+      });
+
+      router.replace('/(student)/dashboard');
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : 'Could not sign in.';
-      setError(describeError(message));
+      setError(caught instanceof ApiError ? caught.message : 'Could not sign in. Try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ─── Faculty Login ───
+  const onFacultyLogin = async (): Promise<void> => {
+    clearError();
+    if (!email.trim()) { setError('Enter your email address.'); return; }
+    if (!password) { setError('Enter your password.'); return; }
+
+    setSubmitting(true);
+    try {
+      await login(email, password);
+      router.replace('/(faculty)/dashboard');
+    } catch (caught) {
+      const msg = caught instanceof Error ? caught.message : 'Could not sign in.';
+      if (msg.includes('Invalid login credentials')) {
+        setError('Email or password is incorrect.');
+      } else if (msg.includes('too many')) {
+        setError('Too many attempts. Wait a minute.');
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        <View style={styles.header}>
-          <Text style={styles.title}>Internship Manager</Text>
-          <Text style={styles.subtitle}>Sign in to continue</Text>
-        </View>
+    <Screen>
+      {/* ─── App Title ─── */}
+      <View style={styles.appHeader}>
+        <Text style={styles.appName}>Internship Manager</Text>
+      </View>
 
-        <Text style={styles.label}>Email</Text>
-        <TextInput
-          style={styles.input}
-          value={email}
-          onChangeText={(text) => {
-            setEmail(text);
-            setError(null);
-          }}
-          placeholder="you@smvec.ac.in"
-          placeholderTextColor={colors.textFaint}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoComplete="email"
-          textContentType="emailAddress"
-          returnKeyType="next"
-          accessibilityLabel="Email"
-        />
-
-        <Text style={styles.label}>Password</Text>
-        <View style={styles.passwordRow}>
-          <TextInput
-            style={styles.passwordInput}
-            value={password}
-            onChangeText={(text) => {
-              setPassword(text);
-              setError(null);
-            }}
-            placeholder="Your password"
-            placeholderTextColor={colors.textFaint}
-            secureTextEntry={!showPassword}
-            autoCapitalize="none"
-            autoComplete="current-password"
-            textContentType="password"
-            returnKeyType="go"
-            onSubmitEditing={() => void onSubmit()}
-            accessibilityLabel="Password"
+      {/* ─── Tab Bar ─── */}
+      <View style={styles.tabBar}>
+        <Pressable
+          style={[styles.tab, activeTab === 'student' && styles.tabActive]}
+          onPress={() => { setActiveTab('student'); clearError(); }}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: activeTab === 'student' }}
+        >
+          <MaterialIcons
+            name="school"
+            size={18}
+            color={activeTab === 'student' ? colors.primary : colors.textMuted}
           />
-          <Pressable
-            onPress={() => setShowPassword((previous) => !previous)}
-            style={styles.eyeButton}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
-            accessibilityState={{ selected: showPassword }}
-          >
-            <Text style={styles.eyeText}>{showPassword ? 'Hide' : 'Show'}</Text>
-          </Pressable>
-        </View>
+          <Text style={[styles.tabText, activeTab === 'student' && styles.tabTextActive]}>
+            Student Portal
+          </Text>
+        </Pressable>
 
+        <Pressable
+          style={[styles.tab, activeTab === 'faculty' && styles.tabActive]}
+          onPress={() => { setActiveTab('faculty'); clearError(); }}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: activeTab === 'faculty' }}
+        >
+          <MaterialIcons
+            name="admin-panel-settings"
+            size={18}
+            color={activeTab === 'faculty' ? colors.primary : colors.textMuted}
+          />
+          <Text style={[styles.tabText, activeTab === 'faculty' && styles.tabTextActive]}>
+            Faculty / Admin
+          </Text>
+        </Pressable>
+      </View>
+
+      {/* ─── Form Card ─── */}
+      <View style={styles.formCard}>
+        {activeTab === 'student' ? (
+          <>
+            <Text style={styles.formTitle}>Student Sign In</Text>
+            <Text style={styles.formSubtitle}>
+              Enter your register number and mobile number
+            </Text>
+
+            {/* Register Number */}
+            <Text style={styles.fieldLabel}>Register Number</Text>
+            <View style={styles.inputRow}>
+              <MaterialIcons name="badge" size={20} color={colors.textMuted} style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                value={registerNumber}
+                onChangeText={(t) => { setRegisterNumber(t); clearError(); }}
+                placeholder="e.g. 21CS101"
+                placeholderTextColor={colors.textFaint}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                returnKeyType="next"
+                accessibilityLabel="Register Number"
+              />
+            </View>
+
+            {/* Mobile Number */}
+            <Text style={styles.fieldLabel}>Mobile Number</Text>
+            <View style={styles.inputRow}>
+              <MaterialIcons name="phone" size={20} color={colors.textMuted} style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                value={mobile}
+                onChangeText={(t) => { setMobile(t); clearError(); }}
+                placeholder="10-digit mobile number"
+                placeholderTextColor={colors.textFaint}
+                keyboardType="phone-pad"
+                returnKeyType="go"
+                onSubmitEditing={() => void onStudentLogin()}
+                accessibilityLabel="Mobile Number"
+              />
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={styles.formTitle}>Faculty / Admin Sign In</Text>
+            <Text style={styles.formSubtitle}>
+              Enter your institutional email and password
+            </Text>
+
+            {/* Email */}
+            <Text style={styles.fieldLabel}>Email</Text>
+            <View style={styles.inputRow}>
+              <MaterialIcons name="person-outline" size={20} color={colors.textMuted} style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                value={email}
+                onChangeText={(t) => { setEmail(t); clearError(); }}
+                placeholder="e.g. faculty@smvec.ac.in"
+                placeholderTextColor={colors.textFaint}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoComplete="email"
+                returnKeyType="next"
+                accessibilityLabel="Email"
+              />
+            </View>
+
+            {/* Password */}
+            <Text style={styles.fieldLabel}>Password</Text>
+            <View style={styles.inputRow}>
+              <MaterialIcons name="lock-outline" size={20} color={colors.textMuted} style={styles.inputIcon} />
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                value={password}
+                onChangeText={(t) => { setPassword(t); clearError(); }}
+                placeholder="Your password"
+                placeholderTextColor={colors.textFaint}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                returnKeyType="go"
+                onSubmitEditing={() => void onFacultyLogin()}
+                accessibilityLabel="Password"
+              />
+              <Pressable
+                onPress={() => setShowPassword((prev) => !prev)}
+                hitSlop={10}
+                style={styles.eyeBtn}
+                accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+              >
+                <MaterialIcons
+                  name={showPassword ? 'visibility' : 'visibility-off'}
+                  size={22}
+                  color={colors.textMuted}
+                />
+              </Pressable>
+            </View>
+          </>
+        )}
+
+        {/* Error */}
         {error ? (
           <View style={styles.errorBox} accessibilityRole="alert" accessibilityLiveRegion="polite">
-            <Text style={styles.errorTitle}>{error.title}</Text>
-            {error.detail ? <Text style={styles.errorDetail}>{error.detail}</Text> : null}
+            <Text style={styles.errorText}>{error}</Text>
           </View>
         ) : null}
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.button,
-            pressed && styles.buttonPressed,
-            isSigningIn && styles.buttonDisabled,
-          ]}
-          onPress={() => void onSubmit()}
-          disabled={isSigningIn}
-          accessibilityRole="button"
-          accessibilityLabel="Sign in"
-          accessibilityState={{ busy: isSigningIn, disabled: isSigningIn }}
-        >
-          {isSigningIn ? (
-            <ActivityIndicator color={colors.onPrimary} size="small" />
-          ) : (
-            <Text style={styles.buttonText}>Sign in</Text>
-          )}
-        </Pressable>
+        {/* Sign In Button */}
+        <Button
+          label={activeTab === 'student' ? 'Sign In' : 'Sign In'}
+          onPress={() => void (activeTab === 'student' ? onStudentLogin() : onFacultyLogin())}
+          loading={submitting}
+        />
 
-        <Pressable
-          style={styles.forgotButton}
-          onPress={() => router.push('/(auth)/forgot-password')}
-          accessibilityRole="button"
-          accessibilityLabel="Forgot password"
-        >
-          <Text style={styles.forgotText}>Forgot password?</Text>
-        </Pressable>
-
-        {/* Development convenience. Remove before any real deployment. */}
-        {__DEV__ ? (
-          <View style={styles.demoBox}>
-            <Text style={styles.demoTitle}>Demo accounts — password Internship1</Text>
-            {[
-              ['Student', 'praveen@smvec.ac.in'],
-              ['Faculty', 'faculty@smvec.ac.in'],
-              ['Admin', 'admin@smvec.ac.in'],
-            ].map(([label, address]) => (
-              <Pressable
-                key={address}
-                onPress={() => {
-                  setEmail(address!);
-                  setPassword('Internship1');
-                  setError(null);
-                }}
-                style={styles.demoRow}
-                accessibilityRole="button"
-                accessibilityLabel={`Fill ${label} credentials`}
-              >
-                <Text style={styles.demoText}>
-                  {label}: {address}
-                </Text>
-              </Pressable>
-            ))}
+        {/* Footer links */}
+        {activeTab === 'student' ? (
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>New student?</Text>
+            <Pressable onPress={() => router.push('/(auth)/student-register')}>
+              <Text style={styles.footerLink}>Create Account</Text>
+            </Pressable>
           </View>
-        ) : null}
-      </ScrollView>
-    </KeyboardAvoidingView>
+        ) : (
+          <View style={styles.footer}>
+            <Pressable onPress={() => router.push('/(auth)/forgot-password')}>
+              <Text style={styles.footerLink}>Forgot password?</Text>
+            </Pressable>
+          </View>
+        )}
+      </View>
+
+      {/* Dev credentials */}
+      {__DEV__ ? (
+        <View style={styles.devBox}>
+          <Text style={styles.devTitle}>Dev accounts (tap to fill)</Text>
+          <Pressable
+            onPress={() => { setActiveTab('student'); setRegisterNumber('21CS101'); setMobile('9876543210'); }}
+            style={styles.devRow}
+          >
+            <Text style={styles.devText}>Student: 21CS101 / 9876543210</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => { setActiveTab('faculty'); setEmail('faculty@smvec.ac.in'); setPassword('Internship1'); }}
+            style={styles.devRow}
+          >
+            <Text style={styles.devText}>Faculty: faculty@smvec.ac.in / Internship1</Text>
+          </Pressable>
+        </View>
+      ) : null}
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: colors.background },
-  container: { flexGrow: 1, justifyContent: 'center', padding: spacing.xl },
-  header: { alignItems: 'center', marginBottom: spacing.xl },
-  title: { fontSize: fontSize.heading, fontWeight: '800', color: colors.primary },
-  subtitle: { fontSize: fontSize.body, color: colors.textMuted, marginTop: spacing.xs },
-  label: {
+  appHeader: { alignItems: 'center', marginTop: spacing.xl, marginBottom: spacing.lg },
+  appName: { fontSize: fontSize.heading, fontWeight: '800', color: colors.primary },
+
+  // Tab bar
+  tabBar: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+    marginBottom: spacing.lg,
+  },
+  tab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: 14,
+    borderBottomWidth: 3,
+    borderBottomColor: 'transparent',
+  },
+  tabActive: {
+    borderBottomColor: colors.primary,
+    backgroundColor: colors.infoBg,
+  },
+  tabText: { fontSize: fontSize.small, fontWeight: '600', color: colors.textMuted },
+  tabTextActive: { color: colors.primary },
+
+  // Form card
+  formCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.xl,
+  },
+  formTitle: {
+    fontSize: fontSize.title,
+    fontWeight: '800',
+    color: colors.text,
+    textAlign: 'center',
+    marginBottom: spacing.xs,
+  },
+  formSubtitle: {
+    fontSize: fontSize.small,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginBottom: spacing.xl,
+  },
+
+  // Fields
+  fieldLabel: {
     fontSize: fontSize.small,
     fontWeight: '600',
     color: colors.text,
-    marginTop: spacing.lg,
-    marginBottom: spacing.xs,
+    marginBottom: spacing.sm,
   },
-  input: {
-    minHeight: touchTarget,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    fontSize: fontSize.body,
-    color: colors.text,
-    backgroundColor: colors.surface,
-  },
-  passwordRow: {
+  inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: colors.border,
     borderRadius: radius.md,
     backgroundColor: colors.surface,
+    marginBottom: spacing.lg,
+    minHeight: 50,
   },
-  passwordInput: {
+  inputIcon: { marginLeft: spacing.md },
+  input: {
     flex: 1,
-    minHeight: touchTarget,
     paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
     fontSize: fontSize.body,
     color: colors.text,
   },
-  eyeButton: {
-    paddingHorizontal: spacing.md,
-    minHeight: touchTarget,
-    justifyContent: 'center',
-  },
-  eyeText: { fontSize: fontSize.small, fontWeight: '700', color: colors.primary },
+  eyeBtn: { paddingHorizontal: spacing.md },
+
+  // Error
   errorBox: {
     backgroundColor: colors.dangerBg,
     borderRadius: radius.md,
-    borderLeftWidth: 4,
-    borderLeftColor: colors.danger,
     padding: spacing.md,
-    marginTop: spacing.lg,
+    marginBottom: spacing.lg,
   },
-  errorTitle: { color: colors.danger, fontSize: fontSize.small, fontWeight: '700' },
-  errorDetail: { color: colors.danger, fontSize: fontSize.caption, marginTop: 2 },
-  button: {
-    minHeight: touchTarget,
-    backgroundColor: colors.primary,
-    borderRadius: radius.md,
+  errorText: { color: colors.danger, fontSize: fontSize.small, textAlign: 'center' },
+
+  // Footer
+  footer: {
+    flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+  },
+  footerText: { fontSize: fontSize.small, color: colors.textMuted },
+  footerLink: { fontSize: fontSize.small, fontWeight: '700', color: colors.primary },
+
+  // Dev
+  devBox: {
     marginTop: spacing.xl,
-  },
-  buttonPressed: { opacity: 0.85 },
-  buttonDisabled: { opacity: 0.6 },
-  buttonText: { color: colors.onPrimary, fontSize: fontSize.body, fontWeight: '700' },
-  forgotButton: {
-    alignItems: 'center',
-    marginTop: spacing.md,
-    minHeight: touchTarget,
-    justifyContent: 'center',
-  },
-  forgotText: { color: colors.primary, fontSize: fontSize.body },
-  demoBox: {
-    marginTop: spacing.lg,
     padding: spacing.md,
-    backgroundColor: colors.infoBg,
+    backgroundColor: colors.surfaceAlt,
     borderRadius: radius.md,
   },
-  demoTitle: {
-    fontSize: fontSize.caption,
-    fontWeight: '700',
-    color: colors.info,
-    marginBottom: spacing.xs,
-  },
-  demoRow: { minHeight: 32, justifyContent: 'center' },
-  demoText: { fontSize: fontSize.caption, color: colors.info },
+  devTitle: { fontSize: fontSize.caption, fontWeight: '700', color: colors.textMuted, marginBottom: spacing.sm },
+  devRow: { paddingVertical: 4 },
+  devText: { fontSize: fontSize.caption, color: colors.primary },
 });

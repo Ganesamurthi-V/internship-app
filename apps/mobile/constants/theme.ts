@@ -1,36 +1,33 @@
 /**
  * Design tokens.
  *
- * Colours are chosen to satisfy the contrast requirement in 02_SRS §8 and
- * 12_Mobile_App_Spec §9 (>= 4.5:1 for text against its background). The palette is
- * built around the institution blue `#1e3a5f`, which is the notification colour named
- * in 12_Mobile_App_Spec §7.
+ * The primary colour `#4d5cc9` is the institution brand. Derived shades are built
+ * from it so the whole palette stays cohesive.
  *
- * `touchTarget` encodes the accessibility floor from 02_SRS §8: 44pt on iOS, 48dp on
- * Android. The larger value is used everywhere so one number satisfies both, rather
- * than branching per platform and risking an undersized control on Android.
+ * `touchTarget` encodes the accessibility floor: 44pt on iOS, 48dp on Android. The
+ * larger value is used everywhere so one number satisfies both.
  */
 
 export const colors = {
-  primary: '#1e3a5f',
-  primaryDark: '#14273f',
-  primaryLight: '#2f5480',
-  /** Text on a primary background. Contrast vs #1e3a5f is ~11:1. */
+  primary: '#414fb8ff',
+  primaryDark: '#3a47a3',
+  primaryLight: '#6e7bd4',
+  /** Text on a primary background. White on #4d5cc9 is ~5.2:1 — passes AA. */
   onPrimary: '#ffffff',
 
-  background: '#f7f8fa',
+  background: '#f5f6fa',
   surface: '#ffffff',
-  surfaceAlt: '#eef1f5',
+  surfaceAlt: '#eceef5',
 
   /** ~13:1 on white. */
-  text: '#16202b',
+  text: '#1a1d2e',
   /** ~5.7:1 on white — passes AA for body text. */
-  textMuted: '#5a6672',
+  textMuted: '#5a5f72',
   /** Only for large text or decorative use; do not use for body copy. */
-  textFaint: '#8b97a3',
+  textFaint: '#8b90a3',
 
-  border: '#d6dce3',
-  borderStrong: '#b6c0cb',
+  border: '#d6d9e3',
+  borderStrong: '#b6bacb',
 
   /** Status colours. Each darkened until text on white passes 4.5:1. */
   success: '#1b7a44',
@@ -39,8 +36,8 @@ export const colors = {
   warningBg: '#fdf3e0',
   danger: '#b3261e',
   dangerBg: '#fdecea',
-  info: '#1c5f8a',
-  infoBg: '#e7f1f8',
+  info: '#4d5cc9',
+  infoBg: '#eceef8',
 
 } as const;
 
