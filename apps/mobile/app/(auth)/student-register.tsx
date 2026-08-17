@@ -1,102 +1,96 @@
 /**
- * Student registration — all 20 fields grouped into sections.
+ * Student registration — multi-step wizard with breadcrumbs.
  *
- * On success the returned session is set in Supabase and the user navigates
- * directly to the student dashboard.
+ * 4 steps:
+ *   1. Personal Details
+ *   2. Internship Details
+ *   3. Mentor Details
+ *   4. Documents & Submit
+ *
+ * Each step validates its own fields before allowing "Next". The breadcrumb bar
+ * at the top shows progress and lets the student tap back to a completed step.
  */
 
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import type { AuthenticatedUser, InternshipDomain, InternshipMode } from '@ims/shared-types';
+import type { InternshipDomain, InternshipMode } from '@ims/shared-types';
 import {
   INTERNSHIP_DOMAINS,
   INTERNSHIP_DOMAIN_LABELS,
   INTERNSHIP_MODES,
   INTERNSHIP_MODE_LABELS,
 } from '@ims/shared-types';
-import { Screen } from '@/components/shared/Screen';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { ChipGroup, type ChipOption } from '@/components/ui/Chips';
 import { api, ApiError } from '@/lib/api/client';
 import { uploadFile, type PickedFile } from '@/lib/api/upload';
-import { getSupabase } from '@/lib/supabase';
-import { useAuthStore } from '@/stores/authStore';
 import { colors, fontSize, radius, spacing } from '@/constants/theme';
 
 // ---------------------------------------------------------------------------
-// Types
+// Constants
 // ---------------------------------------------------------------------------
 
-interface StudentRegisterResponse {
-  session: {
-    accessToken: string;
-    refreshToken: string;
-    expiresAt: number;
-  };
-  user: AuthenticatedUser;
-}
+const DEPARTMENTS = [
+  'Electrical and Electronics Engineering',
+  'Electronics and Communication Engineering',
+  'Computer Science and Engineering',
+  'Information Technology',
+  'Instrumentation and Control Engineering',
+  'Mechanical Engineering',
+  'Civil Engineering',
+  'Biomedical Engineering',
+  'Mechatronics',
+  'Computer Science and Business Systems',
+  'Computer and Communication Engineering',
+  'Artificial Intelligence and Data Science',
+  'Fashion Technology',
+] as const;
+
+const YEARS = ['1', '2', '3', '4'] as const;
+const STEPS = ['Personal', 'Internship', 'Mentor', 'Documents'] as const;
 
 interface FormData {
-  // Personal
   name: string;
   registerNumber: string;
-  programme: string;
-  yearSection: string;
+  department: string;
+  year: string;
+  section: string;
   email: string;
   mobile: string;
-  // Internship
   organisationName: string;
   organisationLocation: string;
   internshipDomain: InternshipDomain | null;
+  otherDomain: string;
   internshipMode: InternshipMode | null;
   startDate: string;
   endDate: string;
   totalDuration: string;
   workingHoursPerDay: string;
-  // Mentor
-  industryMentorName: string;
-  industryMentorDesignation: string;
+  mentorName: string;
+  mentorDesignation: string;
   mentorContact: string;
   facultyCoordinator: string;
 }
 
-const INITIAL_FORM: FormData = {
-  name: '',
-  registerNumber: '',
-  programme: '',
-  yearSection: '',
-  email: '',
-  mobile: '',
-  organisationName: '',
-  organisationLocation: '',
-  internshipDomain: null,
-  internshipMode: null,
-  startDate: '',
-  endDate: '',
-  totalDuration: '',
-  workingHoursPerDay: '',
-  industryMentorName: '',
-  industryMentorDesignation: '',
-  mentorContact: '',
-  facultyCoordinator: '',
+const INITIAL: FormData = {
+  name: '', registerNumber: '', department: '', year: '', section: '',
+  email: '', mobile: '', organisationName: '', organisationLocation: '',
+  internshipDomain: null, otherDomain: '', internshipMode: null,
+  startDate: '', endDate: '', totalDuration: '', workingHoursPerDay: '',
+  mentorName: '', mentorDesignation: '', mentorContact: '', facultyCoordinator: '',
 };
 
-// ---------------------------------------------------------------------------
-// Chip options
-// ---------------------------------------------------------------------------
-
 const domainOptions: ChipOption<InternshipDomain>[] = INTERNSHIP_DOMAINS.map((d) => ({
-  value: d,
-  label: INTERNSHIP_DOMAIN_LABELS[d],
+  value: d, label: INTERNSHIP_DOMAIN_LABELS[d],
 }));
 
 const modeOptions: ChipOption<InternshipMode>[] = INTERNSHIP_MODES.map((m) => ({
-  value: m,
-  label: INTERNSHIP_MODE_LABELS[m],
+  value: m, label: INTERNSHIP_MODE_LABELS[m],
 }));
 
 // ---------------------------------------------------------------------------
@@ -104,408 +98,418 @@ const modeOptions: ChipOption<InternshipMode>[] = INTERNSHIP_MODES.map((m) => ({
 // ---------------------------------------------------------------------------
 
 export default function StudentRegisterScreen() {
-  const [form, setForm] = useState<FormData>(INITIAL_FORM);
+  const [step, setStep] = useState(0);
+  const [form, setForm] = useState<FormData>(INITIAL);
   const [offerLetter, setOfferLetter] = useState<PickedFile | null>(null);
   const [joiningLetter, setJoiningLetter] = useState<PickedFile | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [showDeptPicker, setShowDeptPicker] = useState(false);
+  const [showStartDate, setShowStartDate] = useState(false);
+  const [showEndDate, setShowEndDate] = useState(false);
 
-  const updateField = <K extends keyof FormData>(key: K, value: FormData[K]) => {
+  const set = <K extends keyof FormData>(key: K, value: FormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
-    setFieldErrors((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
+    setFieldErrors((prev) => { const n = { ...prev }; delete n[key]; return n; });
     setError(null);
   };
 
-  // -------------------------------------------------------------------------
-  // File picking
-  // -------------------------------------------------------------------------
-
-  const pickDocument = async (
-    setter: (file: PickedFile | null) => void,
-  ): Promise<void> => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        copyToCacheDirectory: true,
-      });
-
-      if (result.canceled || !result.assets?.length) return;
-
-      const asset = result.assets[0]!;
-      setter({
-        uri: asset.uri,
-        name: asset.name,
-        mimeType: asset.mimeType ?? 'application/pdf',
-        size: asset.size ?? 0,
-      });
-    } catch {
-      // User cancelled or permission denied — nothing to do.
-    }
+  const pickDoc = async (setter: (f: PickedFile | null) => void) => {
+    const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
+    if (result.canceled || !result.assets?.length) return;
+    const a = result.assets[0]!;
+    setter({ uri: a.uri, name: a.name, mimeType: a.mimeType ?? 'application/pdf', size: a.size ?? 0 });
   };
 
-  // -------------------------------------------------------------------------
-  // Submission
-  // -------------------------------------------------------------------------
+  const fmtDate = (d: Date): string => d.toISOString().slice(0, 10);
 
-  const onSubmit = async (): Promise<void> => {
+  // ─── Step validation ───
+  const validateStep = (s: number): boolean => {
+    const errs: Record<string, string> = {};
+
+    if (s === 0) {
+      if (!form.name.trim()) errs.name = 'Required';
+      if (!form.registerNumber.trim()) errs.registerNumber = 'Required';
+      if (!form.department) errs.department = 'Required';
+      if (!form.year) errs.year = 'Required';
+      if (!form.section.trim()) errs.section = 'Required';
+      if (!form.email.trim()) errs.email = 'Required';
+      if (!form.mobile.trim()) errs.mobile = 'Required';
+    } else if (s === 1) {
+      if (!form.organisationName.trim()) errs.organisationName = 'Required';
+      if (!form.organisationLocation.trim()) errs.organisationLocation = 'Required';
+      if (!form.internshipDomain) errs.internshipDomain = 'Required';
+      if (form.internshipDomain === 'other' && !form.otherDomain.trim()) errs.otherDomain = 'Specify domain';
+      if (!form.internshipMode) errs.internshipMode = 'Required';
+      if (!form.startDate) errs.startDate = 'Required';
+      if (!form.endDate) errs.endDate = 'Required';
+      if (!form.totalDuration.trim()) errs.totalDuration = 'Required';
+      if (!form.workingHoursPerDay.trim()) errs.workingHoursPerDay = 'Required';
+    } else if (s === 2) {
+      if (!form.mentorName.trim()) errs.mentorName = 'Required';
+      if (!form.mentorDesignation.trim()) errs.mentorDesignation = 'Required';
+      if (!form.mentorContact.trim()) errs.mentorContact = 'Required';
+      if (!form.facultyCoordinator.trim()) errs.facultyCoordinator = 'Required';
+    } else if (s === 3) {
+      if (!offerLetter) errs.offerLetter = 'Upload offer letter';
+      if (!joiningLetter) errs.joiningLetter = 'Upload joining letter';
+    }
+
+    if (Object.keys(errs).length > 0) {
+      setFieldErrors(errs);
+      return false;
+    }
     setFieldErrors({});
+    return true;
+  };
+
+  const goNext = () => {
+    if (validateStep(step)) setStep(step + 1);
+  };
+
+  const goBack = () => {
+    if (step === 0) router.back();
+    else setStep(step - 1);
+  };
+
+  // ─── Submit ───
+  const onSubmit = async (): Promise<void> => {
+    if (!validateStep(3)) return;
     setError(null);
-
-    // Client-side required field check
-    const errors: Record<string, string> = {};
-    if (!form.name.trim()) errors.name = 'Student name is required.';
-    if (!form.registerNumber.trim()) errors.registerNumber = 'Register number is required.';
-    if (!form.programme.trim()) errors.programme = 'Programme is required.';
-    if (!form.email.trim()) errors.email = 'Email is required.';
-    if (!form.mobile.trim()) errors.mobile = 'Mobile number is required.';
-    if (!form.organisationName.trim()) errors.organisationName = 'Organisation name is required.';
-
-    if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors);
-      return;
-    }
-
     setSubmitting(true);
 
     try {
-      // Upload documents first if provided
-      let offerLetterDocId: string | undefined;
-      let joiningLetterDocId: string | undefined;
+      let offerDocId: string | undefined;
+      let joinDocId: string | undefined;
+      if (offerLetter) offerDocId = (await uploadFile(offerLetter)).id;
+      if (joiningLetter) joinDocId = (await uploadFile(joiningLetter)).id;
 
-      if (offerLetter) {
-        const doc = await uploadFile(offerLetter);
-        offerLetterDocId = doc.id;
-      }
-      if (joiningLetter) {
-        const doc = await uploadFile(joiningLetter);
-        joiningLetterDocId = doc.id;
-      }
+      const domainValue = form.internshipDomain === 'other' ? form.otherDomain.trim() : form.internshipDomain;
 
-      const response = await api.anonymous.post<StudentRegisterResponse>('/auth/student-register', {
+      const res = await api.anonymous.post<{ message: string; registerNumber: string; status: string }>('/auth/student-register', {
         name: form.name.trim(),
         registerNumber: form.registerNumber.trim().toUpperCase(),
-        programme: form.programme.trim(),
-        yearSection: form.yearSection.trim() || undefined,
-        email: form.email.trim().toLowerCase(),
+        programme: form.department,
+        year: Number(form.year),
+        section: form.section.trim().toUpperCase(),
+        studentEmail: form.email.trim().toLowerCase(),
         mobile: form.mobile.trim(),
         organisationName: form.organisationName.trim(),
-        organisationLocation: form.organisationLocation.trim() || undefined,
-        internshipDomain: form.internshipDomain ?? undefined,
-        internshipMode: form.internshipMode ?? undefined,
-        startDate: form.startDate.trim() || undefined,
-        endDate: form.endDate.trim() || undefined,
-        totalDuration: form.totalDuration.trim() ? Number(form.totalDuration) : undefined,
-        workingHoursPerDay: form.workingHoursPerDay.trim() ? Number(form.workingHoursPerDay) : undefined,
-        industryMentorName: form.industryMentorName.trim() || undefined,
-        industryMentorDesignation: form.industryMentorDesignation.trim() || undefined,
-        mentorContact: form.mentorContact.trim() || undefined,
-        facultyCoordinator: form.facultyCoordinator.trim() || undefined,
-        offerLetterDocId,
-        joiningLetterDocId,
+        organisationLocation: form.organisationLocation.trim(),
+        internshipDomain: domainValue,
+        internshipMode: form.internshipMode,
+        startDate: form.startDate,
+        endDate: form.endDate,
+        durationDays: Number(form.totalDuration),
+        workingHoursPerDay: Number(form.workingHoursPerDay),
+        mentorName: form.mentorName.trim(),
+        mentorDesignation: form.mentorDesignation.trim(),
+        mentorContact: form.mentorContact.trim(),
+        facultyCoordinator: form.facultyCoordinator.trim(),
+        offerLetterDocId: offerDocId,
+        joiningLetterDocId: joinDocId,
       });
 
-      // Set the session in Supabase client
-      await getSupabase().auth.setSession({
-        access_token: response.session.accessToken,
-        refresh_token: response.session.refreshToken,
-      });
-
-      // Set the user in the auth store
-      useAuthStore.setState({
-        user: response.user,
-        isAuthenticated: true,
-        isSigningIn: false,
-        error: null,
-      });
-
-      router.replace('/(student)/dashboard');
+      // Registration successful — account is pending approval, don't auto-login
+      Alert.alert(
+        'Account Created!',
+        res.message,
+        [{ text: 'OK', onPress: () => router.replace('/(auth)/login') }],
+      );
     } catch (caught) {
       if (caught instanceof ApiError) {
-        if (caught.fields) {
-          setFieldErrors(caught.fields);
-        } else {
-          setError(caught.message);
-        }
-      } else {
-        setError('Something went wrong. Check your connection and try again.');
-      }
-    } finally {
-      setSubmitting(false);
-    }
+        caught.fields ? setFieldErrors(caught.fields) : setError(caught.message);
+      } else { setError('Something went wrong. Try again.'); }
+    } finally { setSubmitting(false); }
   };
 
-  // -------------------------------------------------------------------------
-  // Render
-  // -------------------------------------------------------------------------
-
+  // ─── Render ───
   return (
-    <Screen>
-      <View style={styles.header}>
-        <Text style={styles.title}>Create Account</Text>
-        <Text style={styles.subtitle}>Register as a new student</Text>
+    <View style={styles.container}>
+      {/* Header */}
+      <View style={styles.headerBar}>
+        <Pressable onPress={goBack} hitSlop={10} style={styles.backBtn}>
+          <MaterialIcons name="arrow-back" size={24} color={colors.onPrimary} />
+        </Pressable>
+        <Text style={styles.headerTitle}>Create Account</Text>
+        <View style={{ width: 40 }} />
       </View>
 
-      {/* ── Personal Details ── */}
-      <Text style={styles.sectionTitle}>Personal Details</Text>
+      {/* Breadcrumbs */}
+      <View style={styles.breadcrumbs}>
+        {STEPS.map((label, i) => (
+          <Pressable
+            key={label}
+            style={styles.breadcrumbItem}
+            onPress={() => { if (i < step) setStep(i); }}
+            disabled={i > step}
+          >
+            <View style={[
+              styles.breadcrumbDot,
+              i < step && styles.breadcrumbDotDone,
+              i === step && styles.breadcrumbDotActive,
+            ]}>
+              {i < step ? (
+                <MaterialIcons name="check" size={12} color={colors.onPrimary} />
+              ) : (
+                <Text style={[
+                  styles.breadcrumbDotText,
+                  i === step && styles.breadcrumbDotTextActive,
+                ]}>{i + 1}</Text>
+              )}
+            </View>
+            <Text style={[
+              styles.breadcrumbLabel,
+              i === step && styles.breadcrumbLabelActive,
+              i < step && styles.breadcrumbLabelDone,
+            ]}>{label}</Text>
+            {i < STEPS.length - 1 ? (
+              <View style={[styles.breadcrumbLine, i < step && styles.breadcrumbLineDone]} />
+            ) : null}
+          </Pressable>
+        ))}
+      </View>
 
-      <TextField
-        label="Student Name"
-        required
-        value={form.name}
-        onChangeText={(t) => updateField('name', t)}
-        placeholder="Full name"
-        autoComplete="name"
-        error={fieldErrors.name}
-      />
+      {/* Content */}
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {step === 0 && (
+          <View>
+            <Text style={styles.stepTitle}>Personal Details</Text>
 
-      <TextField
-        label="Register Number"
-        required
-        value={form.registerNumber}
-        onChangeText={(t) => updateField('registerNumber', t)}
-        placeholder="e.g. 21CS101"
-        autoCapitalize="characters"
-        error={fieldErrors.registerNumber}
-      />
+            <TextField label="Student Name" required value={form.name}
+              onChangeText={(t) => set('name', t)} placeholder="Full name" error={fieldErrors.name} />
 
-      <TextField
-        label="Programme / Department"
-        required
-        value={form.programme}
-        onChangeText={(t) => updateField('programme', t)}
-        placeholder="e.g. B.Tech CSE"
-        error={fieldErrors.programme}
-      />
+            <TextField label="Register Number" required value={form.registerNumber}
+              onChangeText={(t) => set('registerNumber', t)} placeholder="e.g. 21CS101"
+              autoCapitalize="characters" error={fieldErrors.registerNumber} />
 
-      <TextField
-        label="Year & Section"
-        value={form.yearSection}
-        onChangeText={(t) => updateField('yearSection', t)}
-        placeholder="e.g. IV - A"
-        error={fieldErrors.yearSection}
-      />
+            {/* Department dropdown */}
+            <View style={styles.fieldWrap}>
+              <Text style={styles.label}>Department <Text style={styles.req}>*</Text></Text>
+              <Pressable style={styles.dropdown} onPress={() => setShowDeptPicker(!showDeptPicker)}>
+                <Text style={form.department ? styles.dropdownText : styles.dropdownPlaceholder} numberOfLines={1}>
+                  {form.department || 'Select department'}
+                </Text>
+                <MaterialIcons name={showDeptPicker ? 'expand-less' : 'expand-more'} size={22} color={colors.textMuted} />
+              </Pressable>
+              {showDeptPicker && (
+                <View style={styles.dropdownList}>
+                  <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                    {DEPARTMENTS.map((dept) => (
+                      <Pressable key={dept} style={styles.dropdownItem}
+                        onPress={() => { set('department', dept); setShowDeptPicker(false); }}>
+                        <Text style={[styles.dropdownItemText, form.department === dept && styles.dropdownItemActive]}>
+                          {dept}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+              {fieldErrors.department ? <Text style={styles.fieldError}>{fieldErrors.department}</Text> : null}
+            </View>
 
-      <TextField
-        label="Student Email ID"
-        required
-        value={form.email}
-        onChangeText={(t) => updateField('email', t)}
-        placeholder="you@smvec.ac.in"
-        keyboardType="email-address"
-        autoCapitalize="none"
-        autoComplete="email"
-        error={fieldErrors.email}
-      />
+            {/* Year & Section */}
+            <View style={styles.row}>
+              <View style={styles.halfField}>
+                <Text style={styles.label}>Year <Text style={styles.req}>*</Text></Text>
+                <View style={styles.yearRow}>
+                  {YEARS.map((y) => (
+                    <Pressable key={y} style={[styles.yearChip, form.year === y && styles.yearChipActive]}
+                      onPress={() => set('year', y)}>
+                      <Text style={[styles.yearChipText, form.year === y && styles.yearChipTextActive]}>{y}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {fieldErrors.year ? <Text style={styles.fieldError}>{fieldErrors.year}</Text> : null}
+              </View>
+              <View style={styles.halfField}>
+                <TextField label="Section" required value={form.section}
+                  onChangeText={(t) => set('section', t)} placeholder="A"
+                  autoCapitalize="characters" error={fieldErrors.section} />
+              </View>
+            </View>
 
-      <TextField
-        label="Mobile Number"
-        required
-        value={form.mobile}
-        onChangeText={(t) => updateField('mobile', t)}
-        placeholder="10-digit mobile"
-        keyboardType="phone-pad"
-        autoComplete="tel"
-        error={fieldErrors.mobile}
-      />
+            <TextField label="Student Email" required value={form.email}
+              onChangeText={(t) => set('email', t)} placeholder="you@smvec.ac.in"
+              keyboardType="email-address" autoCapitalize="none" error={fieldErrors.email} />
 
-      {/* ── Internship Details ── */}
-      <Text style={styles.sectionTitle}>Internship Details</Text>
+            <TextField label="Mobile Number" required value={form.mobile}
+              onChangeText={(t) => set('mobile', t)} placeholder="10-digit mobile"
+              keyboardType="phone-pad" error={fieldErrors.mobile} />
+          </View>
+        )}
 
-      <TextField
-        label="Organisation / Company Name"
-        required
-        value={form.organisationName}
-        onChangeText={(t) => updateField('organisationName', t)}
-        placeholder="Company name"
-        error={fieldErrors.organisationName}
-      />
+        {step === 1 && (
+          <View>
+            <Text style={styles.stepTitle}>Internship Details</Text>
 
-      <TextField
-        label="Organisation Location"
-        value={form.organisationLocation}
-        onChangeText={(t) => updateField('organisationLocation', t)}
-        placeholder="City, State"
-        error={fieldErrors.organisationLocation}
-      />
+            <TextField label="Organisation / Company" required value={form.organisationName}
+              onChangeText={(t) => set('organisationName', t)} placeholder="Company name"
+              error={fieldErrors.organisationName} />
 
-      <ChipGroup<InternshipDomain>
-        label="Internship Domain"
-        options={domainOptions}
-        value={form.internshipDomain}
-        onChange={(v) => updateField('internshipDomain', v)}
-        error={fieldErrors.internshipDomain}
-      />
+            <TextField label="Organisation Location" required value={form.organisationLocation}
+              onChangeText={(t) => set('organisationLocation', t)} placeholder="City, State"
+              error={fieldErrors.organisationLocation} />
 
-      <ChipGroup<InternshipMode>
-        label="Internship Mode"
-        options={modeOptions}
-        value={form.internshipMode}
-        onChange={(v) => updateField('internshipMode', v)}
-        error={fieldErrors.internshipMode}
-      />
+            <ChipGroup<InternshipDomain> label="Internship Domain *" options={domainOptions}
+              value={form.internshipDomain} onChange={(v) => set('internshipDomain', v)}
+              error={fieldErrors.internshipDomain} required />
 
-      <TextField
-        label="Internship Start Date"
-        value={form.startDate}
-        onChangeText={(t) => updateField('startDate', t)}
-        placeholder="YYYY-MM-DD"
-        error={fieldErrors.startDate}
-      />
+            {form.internshipDomain === 'other' && (
+              <TextField label="Specify Domain" required value={form.otherDomain}
+                onChangeText={(t) => set('otherDomain', t)} placeholder="Your domain"
+                error={fieldErrors.otherDomain} />
+            )}
 
-      <TextField
-        label="Internship End Date"
-        value={form.endDate}
-        onChangeText={(t) => updateField('endDate', t)}
-        placeholder="YYYY-MM-DD"
-        error={fieldErrors.endDate}
-      />
+            <ChipGroup<InternshipMode> label="Internship Mode *" options={modeOptions}
+              value={form.internshipMode} onChange={(v) => set('internshipMode', v)}
+              error={fieldErrors.internshipMode} required />
 
-      <TextField
-        label="Total Duration (days)"
-        value={form.totalDuration}
-        onChangeText={(t) => updateField('totalDuration', t)}
-        placeholder="e.g. 45"
-        keyboardType="numeric"
-        error={fieldErrors.totalDuration}
-      />
+            {/* Dates */}
+            <View style={styles.row}>
+              <View style={styles.halfField}>
+                <Text style={styles.label}>Start Date <Text style={styles.req}>*</Text></Text>
+                <Pressable style={styles.dateBtn} onPress={() => setShowStartDate(true)}>
+                  <MaterialIcons name="calendar-today" size={16} color={colors.primary} />
+                  <Text style={form.startDate ? styles.dateText : styles.datePlaceholder}>
+                    {form.startDate || 'Pick date'}
+                  </Text>
+                </Pressable>
+                {showStartDate && (
+                  <DateTimePicker value={form.startDate ? new Date(form.startDate) : new Date()}
+                    mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onValueChange={(_, d) => { setShowStartDate(Platform.OS === 'ios'); if (d) set('startDate', fmtDate(d)); }} />
+                )}
+                {fieldErrors.startDate ? <Text style={styles.fieldError}>{fieldErrors.startDate}</Text> : null}
+              </View>
+              <View style={styles.halfField}>
+                <Text style={styles.label}>End Date <Text style={styles.req}>*</Text></Text>
+                <Pressable style={styles.dateBtn} onPress={() => setShowEndDate(true)}>
+                  <MaterialIcons name="calendar-today" size={16} color={colors.primary} />
+                  <Text style={form.endDate ? styles.dateText : styles.datePlaceholder}>
+                    {form.endDate || 'Pick date'}
+                  </Text>
+                </Pressable>
+                {showEndDate && (
+                  <DateTimePicker value={form.endDate ? new Date(form.endDate) : new Date()}
+                    mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onValueChange={(_, d) => { setShowEndDate(Platform.OS === 'ios'); if (d) set('endDate', fmtDate(d)); }} />
+                )}
+                {fieldErrors.endDate ? <Text style={styles.fieldError}>{fieldErrors.endDate}</Text> : null}
+              </View>
+            </View>
 
-      <TextField
-        label="Working Hours per Day"
-        value={form.workingHoursPerDay}
-        onChangeText={(t) => updateField('workingHoursPerDay', t)}
-        placeholder="e.g. 8"
-        keyboardType="numeric"
-        error={fieldErrors.workingHoursPerDay}
-      />
+            <View style={styles.row}>
+              <View style={styles.halfField}>
+                <TextField label="Duration (days)" required value={form.totalDuration}
+                  onChangeText={(t) => set('totalDuration', t.replace(/[^0-9]/g, ''))}
+                  placeholder="45" keyboardType="numeric" error={fieldErrors.totalDuration} />
+              </View>
+              <View style={styles.halfField}>
+                <TextField label="Hours / Day" required value={form.workingHoursPerDay}
+                  onChangeText={(t) => set('workingHoursPerDay', t.replace(/[^0-9]/g, ''))}
+                  placeholder="8" keyboardType="numeric" error={fieldErrors.workingHoursPerDay} />
+              </View>
+            </View>
+          </View>
+        )}
 
-      {/* ── Mentor Details ── */}
-      <Text style={styles.sectionTitle}>Mentor Details</Text>
+        {step === 2 && (
+          <View>
+            <Text style={styles.stepTitle}>Mentor Details</Text>
 
-      <TextField
-        label="Industry Mentor Name"
-        value={form.industryMentorName}
-        onChangeText={(t) => updateField('industryMentorName', t)}
-        placeholder="Mentor's full name"
-        error={fieldErrors.industryMentorName}
-      />
+            <TextField label="Industry Mentor Name" required value={form.mentorName}
+              onChangeText={(t) => set('mentorName', t)} placeholder="Mentor's full name"
+              error={fieldErrors.mentorName} />
 
-      <TextField
-        label="Industry Mentor Designation"
-        value={form.industryMentorDesignation}
-        onChangeText={(t) => updateField('industryMentorDesignation', t)}
-        placeholder="e.g. Senior Engineer"
-        error={fieldErrors.industryMentorDesignation}
-      />
+            <TextField label="Mentor Designation" required value={form.mentorDesignation}
+              onChangeText={(t) => set('mentorDesignation', t)} placeholder="e.g. Senior Engineer"
+              error={fieldErrors.mentorDesignation} />
 
-      <TextField
-        label="Mentor Email / Contact"
-        value={form.mentorContact}
-        onChangeText={(t) => updateField('mentorContact', t)}
-        placeholder="Email or phone"
-        keyboardType="email-address"
-        autoCapitalize="none"
-        error={fieldErrors.mentorContact}
-      />
+            <TextField label="Mentor Email / Contact" required value={form.mentorContact}
+              onChangeText={(t) => set('mentorContact', t)} placeholder="Email or phone"
+              error={fieldErrors.mentorContact} />
 
-      <TextField
-        label="College Faculty Coordinator"
-        value={form.facultyCoordinator}
-        onChangeText={(t) => updateField('facultyCoordinator', t)}
-        placeholder="Coordinator name"
-        error={fieldErrors.facultyCoordinator}
-      />
+            <TextField label="Faculty Coordinator" required value={form.facultyCoordinator}
+              onChangeText={(t) => set('facultyCoordinator', t)} placeholder="Coordinator name"
+              error={fieldErrors.facultyCoordinator} />
+          </View>
+        )}
 
-      {/* ── Documents ── */}
-      <Text style={styles.sectionTitle}>Documents</Text>
+        {step === 3 && (
+          <View>
+            <Text style={styles.stepTitle}>Documents</Text>
+            <Text style={styles.stepSubtitle}>Upload PDF files for verification</Text>
 
-      <FilePickerField
-        label="Internship Offer Letter (PDF)"
-        file={offerLetter}
-        onPick={() => pickDocument(setOfferLetter)}
-        onClear={() => setOfferLetter(null)}
-        error={fieldErrors.offerLetterDocId}
-      />
+            <FilePicker label="Internship Offer Letter (PDF) *" file={offerLetter}
+              onPick={() => pickDoc(setOfferLetter)} onClear={() => setOfferLetter(null)}
+              error={fieldErrors.offerLetter} />
 
-      <FilePickerField
-        label="Joining Letter / Proof (PDF)"
-        file={joiningLetter}
-        onPick={() => pickDocument(setJoiningLetter)}
-        onClear={() => setJoiningLetter(null)}
-        error={fieldErrors.joiningLetterDocId}
-      />
+            <FilePicker label="Joining Letter / Proof (PDF) *" file={joiningLetter}
+              onPick={() => pickDoc(setJoiningLetter)} onClear={() => setJoiningLetter(null)}
+              error={fieldErrors.joiningLetter} />
 
-      {/* ── Error & Submit ── */}
-      {error ? (
-        <View style={styles.errorBox} accessibilityRole="alert" accessibilityLiveRegion="polite">
-          <Text style={styles.errorText}>{error}</Text>
-        </View>
-      ) : null}
+            {error ? (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
+          </View>
+        )}
+      </ScrollView>
 
-      <Button label="Create Account" onPress={() => void onSubmit()} loading={submitting} />
-
+      {/* Footer buttons */}
       <View style={styles.footer}>
-        <Button label="Back to Login" variant="ghost" onPress={() => router.back()} />
+        {step > 0 && (
+          <Pressable style={styles.footerBackBtn} onPress={goBack}>
+            <MaterialIcons name="arrow-back" size={18} color={colors.primary} />
+            <Text style={styles.footerBackText}>Back</Text>
+          </Pressable>
+        )}
+        <View style={styles.footerSpacer} />
+        {step < 3 ? (
+          <Button label="Next" onPress={goNext} />
+        ) : (
+          <Button label="Create Account" onPress={() => void onSubmit()} loading={submitting} />
+        )}
       </View>
-    </Screen>
+    </View>
   );
 }
 
 // ---------------------------------------------------------------------------
-// File Picker Field
+// File Picker
 // ---------------------------------------------------------------------------
 
-function FilePickerField({
-  label,
-  file,
-  onPick,
-  onClear,
-  error,
-}: {
-  label: string;
-  file: PickedFile | null;
-  onPick: () => void;
-  onClear: () => void;
-  error?: string;
+function FilePicker({ label, file, onPick, onClear, error }: {
+  label: string; file: PickedFile | null; onPick: () => void; onClear: () => void; error?: string;
 }) {
   return (
     <View style={styles.fileField}>
       <Text style={styles.fileLabel}>{label}</Text>
       {file ? (
         <View style={styles.fileRow}>
-          <MaterialIcons name="description" size={20} color={colors.primary} />
-          <Text style={styles.fileName} numberOfLines={1}>
-            {file.name}
-          </Text>
-          <Pressable
-            onPress={onClear}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel={`Remove ${label}`}
-          >
+          <MaterialIcons name="description" size={22} color={colors.success} />
+          <Text style={styles.fileName} numberOfLines={1}>{file.name}</Text>
+          <Pressable onPress={onClear} hitSlop={8}>
             <MaterialIcons name="close" size={20} color={colors.danger} />
           </Pressable>
         </View>
       ) : (
-        <Pressable
-          style={styles.filePicker}
-          onPress={onPick}
-          accessibilityRole="button"
-          accessibilityLabel={`Pick ${label}`}
-        >
-          <MaterialIcons name="upload-file" size={20} color={colors.primary} />
-          <Text style={styles.filePickText}>Choose PDF</Text>
+        <Pressable style={styles.filePicker} onPress={onPick}>
+          <MaterialIcons name="cloud-upload" size={28} color={colors.primary} />
+          <Text style={styles.filePickTitle}>Tap to choose PDF</Text>
+          <Text style={styles.filePickHint}>Max 10 MB</Text>
         </Pressable>
       )}
-      {error ? (
-        <View accessibilityLiveRegion="polite">
-          <Text style={styles.fileError}>{error}</Text>
-        </View>
-      ) : null}
+      {error ? <Text style={styles.fileError}>{error}</Text> : null}
     </View>
   );
 }
@@ -515,51 +519,121 @@ function FilePickerField({
 // ---------------------------------------------------------------------------
 
 const styles = StyleSheet.create({
-  header: { marginTop: spacing.xxl, marginBottom: spacing.xl },
-  title: { fontSize: fontSize.heading, fontWeight: '800', color: colors.primary },
-  subtitle: { fontSize: fontSize.body, color: colors.textMuted, marginTop: spacing.xs },
-  sectionTitle: {
-    fontSize: fontSize.subtitle,
-    fontWeight: '700',
-    color: colors.text,
-    marginTop: spacing.lg,
+  container: { flex: 1, backgroundColor: colors.background },
+
+  // Header
+  headerBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: colors.primary, paddingTop: 50, paddingBottom: spacing.md,
+    paddingHorizontal: spacing.lg,
+  },
+  backBtn: { width: 40, alignItems: 'flex-start' },
+  headerTitle: { fontSize: fontSize.subtitle, fontWeight: '700', color: colors.onPrimary },
+
+  // Breadcrumbs
+  breadcrumbs: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: spacing.lg, paddingHorizontal: spacing.md,
+    backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  breadcrumbItem: { flexDirection: 'row', alignItems: 'center' },
+  breadcrumbDot: {
+    width: 24, height: 24, borderRadius: 12, backgroundColor: colors.surfaceAlt,
+    justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: colors.border,
+  },
+  breadcrumbDotActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  breadcrumbDotDone: { backgroundColor: colors.success, borderColor: colors.success },
+  breadcrumbDotText: { fontSize: 11, fontWeight: '700', color: colors.textMuted },
+  breadcrumbDotTextActive: { color: colors.onPrimary },
+  breadcrumbLabel: { fontSize: 10, color: colors.textMuted, marginLeft: 4, fontWeight: '600' },
+  breadcrumbLabelActive: { color: colors.primary },
+  breadcrumbLabelDone: { color: colors.success },
+  breadcrumbLine: {
+    width: 16, height: 2, backgroundColor: colors.border, marginHorizontal: 4, borderRadius: 1,
+  },
+  breadcrumbLineDone: { backgroundColor: colors.success },
+
+  // Scroll content
+  scroll: { flex: 1 },
+  scrollContent: { padding: spacing.lg, paddingBottom: spacing.xxl },
+  stepTitle: { fontSize: fontSize.title, fontWeight: '800', color: colors.text, marginBottom: spacing.sm },
+  stepSubtitle: { fontSize: fontSize.small, color: colors.textMuted, marginBottom: spacing.lg },
+
+  // Fields
+  label: { fontSize: fontSize.small, fontWeight: '600', color: colors.text, marginBottom: spacing.xs },
+  req: { color: colors.danger },
+  fieldWrap: { marginBottom: spacing.lg },
+  fieldError: { color: colors.danger, fontSize: fontSize.caption, marginTop: 4 },
+
+  // Dropdown
+  dropdown: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.md,
+    paddingHorizontal: spacing.md, minHeight: 48, backgroundColor: colors.surface,
+  },
+  dropdownText: { fontSize: fontSize.body, color: colors.text, flex: 1 },
+  dropdownPlaceholder: { fontSize: fontSize.body, color: colors.textFaint, flex: 1 },
+  dropdownList: {
+    borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
+    backgroundColor: colors.surface, marginTop: spacing.xs, overflow: 'hidden',
+  },
+  dropdownItem: { paddingHorizontal: spacing.md, paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  dropdownItemText: { fontSize: fontSize.small, color: colors.text },
+  dropdownItemActive: { color: colors.primary, fontWeight: '700' },
+
+  // Row
+  row: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.sm },
+  halfField: { flex: 1 },
+
+  // Year
+  yearRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+  yearChip: {
+    width: 36, height: 36, borderRadius: 18, borderWidth: 1.5, borderColor: colors.border,
+    justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surface,
+  },
+  yearChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  yearChipText: { fontSize: fontSize.small, fontWeight: '700', color: colors.text },
+  yearChipTextActive: { color: colors.onPrimary },
+
+  // Date
+  dateBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.md,
+    paddingHorizontal: spacing.md, minHeight: 48, backgroundColor: colors.surface,
     marginBottom: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    paddingBottom: spacing.sm,
   },
-  errorBox: {
-    backgroundColor: colors.dangerBg,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    marginBottom: spacing.lg,
+  dateText: { fontSize: fontSize.body, color: colors.text },
+  datePlaceholder: { fontSize: fontSize.body, color: colors.textFaint },
+
+  // Footer
+  footer: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md, backgroundColor: colors.surface,
+    borderTopWidth: 1, borderTopColor: colors.border,
   },
-  errorText: { color: colors.danger, fontSize: fontSize.small },
-  footer: { marginTop: spacing.lg, alignItems: 'center', marginBottom: spacing.xl },
+  footerBackBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  footerBackText: { fontSize: fontSize.body, color: colors.primary, fontWeight: '600' },
+  footerSpacer: { flex: 1 },
+
+  // Error
+  errorBox: { backgroundColor: colors.dangerBg, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.lg },
+  errorText: { color: colors.danger, fontSize: fontSize.small, textAlign: 'center' },
 
   // File picker
-  fileField: { marginBottom: spacing.lg },
+  fileField: { marginBottom: spacing.xl },
   fileLabel: { fontSize: fontSize.small, fontWeight: '600', color: colors.text, marginBottom: spacing.sm },
   filePicker: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderStyle: 'dashed',
-    borderRadius: radius.md,
-    padding: spacing.md,
-    backgroundColor: colors.surface,
-  },
-  filePickText: { fontSize: fontSize.body, color: colors.primary },
-  fileRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
+    alignItems: 'center', gap: spacing.sm, borderWidth: 2, borderColor: colors.border,
+    borderStyle: 'dashed', borderRadius: radius.lg, paddingVertical: spacing.xl,
     backgroundColor: colors.surfaceAlt,
-    borderRadius: radius.md,
-    padding: spacing.md,
   },
-  fileName: { flex: 1, fontSize: fontSize.small, color: colors.text },
+  filePickTitle: { fontSize: fontSize.body, fontWeight: '600', color: colors.primary },
+  filePickHint: { fontSize: fontSize.caption, color: colors.textMuted },
+  fileRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    backgroundColor: colors.successBg, borderRadius: radius.md, padding: spacing.md,
+  },
+  fileName: { flex: 1, fontSize: fontSize.small, color: colors.text, fontWeight: '600' },
   fileError: { marginTop: spacing.xs, fontSize: fontSize.small, color: colors.danger },
 });

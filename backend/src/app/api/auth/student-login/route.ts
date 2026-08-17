@@ -48,7 +48,10 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
   }
 
   if (student.user.status !== 'active') {
-    throw unauthorized('Your account is not active. Contact your department office.');
+    if (student.user.status === 'pending') {
+      throw unauthorized('Your account is awaiting faculty approval. You will be able to log in once approved.');
+    }
+    throw unauthorized('Your account has been suspended. Contact your department office.');
   }
 
   // 3. Sign in via Supabase using their email + mobile as password

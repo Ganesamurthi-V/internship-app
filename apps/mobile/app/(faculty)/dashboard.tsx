@@ -143,6 +143,19 @@ export default function FacultyDashboardScreen() {
         </Card>
       ) : null}
 
+      {/* ---- Pending student approvals ---- */}
+      <Card title="Student Registrations">
+        <Text style={styles.body}>
+          New students need your approval before they can log in and start submitting.
+        </Text>
+        <View style={styles.spacer} />
+        <Button
+          label="View pending approvals"
+          variant="secondary"
+          onPress={() => router.push('/(faculty)/students/pending')}
+        />
+      </Card>
+
       {/* ---- Sign out ---- */}
       <Card title="Account">
         <Text style={styles.muted}>Signed in as {user?.email ?? 'faculty'}.</Text>

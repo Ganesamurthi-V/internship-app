@@ -77,6 +77,17 @@ export default function FacultyLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="manage-faculty"
+        options={{
+          title: 'Faculty',
+          // Only show this tab for admin; faculty don't manage other faculty
+          href: role === 'admin' ? undefined : null,
+          tabBarIcon: ({ color, size }) => (
+            <MaterialIcons name="admin-panel-settings" size={size} color={color} />
+          ),
+        }}
+      />
     </Tabs>
   );
 }

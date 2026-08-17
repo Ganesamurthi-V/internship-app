@@ -11,6 +11,7 @@ export default function StudentsLayout() {
       }}
     >
       <Stack.Screen name="index" options={{ title: 'Students' }} />
+      <Stack.Screen name="pending" options={{ title: 'Pending Approvals' }} />
       <Stack.Screen name="[id]" options={{ title: 'Student' }} />
     </Stack>
   );

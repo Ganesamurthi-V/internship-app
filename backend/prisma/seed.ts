@@ -84,25 +84,33 @@ async function main(): Promise<void> {
   // Departments
   // -------------------------------------------------------------------------
   const departmentNames = [
+    'Electrical and Electronics Engineering',
+    'Electronics and Communication Engineering',
     'Computer Science and Engineering',
     'Information Technology',
-    'Electronics and Communication Engineering',
+    'Instrumentation and Control Engineering',
     'Mechanical Engineering',
-    'Master of Business Administration',
+    'Civil Engineering',
+    'Biomedical Engineering',
+    'Mechatronics',
+    'Computer Science and Business Systems',
+    'Computer and Communication Engineering',
+    'Artificial Intelligence and Data Science',
+    'Fashion Technology',
   ];
 
-  const departments = await Promise.all(
-    departmentNames.map((name) =>
-      prisma.department.upsert({
-        where: { name_institution: { name, institution: INSTITUTION } },
-        create: { name, institution: INSTITUTION },
-        update: {},
-        select: { id: true, name: true },
-      }),
-    ),
-  );
+  const departments: { id: string; name: string }[] = [];
+  for (const name of departmentNames) {
+    const dept = await prisma.department.upsert({
+      where: { name_institution: { name, institution: INSTITUTION } },
+      create: { name, institution: INSTITUTION },
+      update: {},
+      select: { id: true, name: true },
+    });
+    departments.push(dept);
+  }
 
-  const cse = departments[0]!;
+  const cse = departments.find((d) => d.name === 'Computer Science and Engineering')!;
   console.log(`  Departments: ${departments.length}`);
 
   // -------------------------------------------------------------------------

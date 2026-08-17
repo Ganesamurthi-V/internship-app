@@ -18,7 +18,6 @@ import { created, parseJson, withErrorHandling } from '@/lib/http';
 import { conflict, serverError } from '@/lib/errors';
 import { prisma } from '@/lib/prisma';
 import { supabaseAdmin } from '@/lib/supabase';
-import { buildAuthenticatedUser } from '@/server/auth/identity';
 import { recordAudit } from '@/lib/audit';
 import { getRequestContext } from '@/lib/http';
 
@@ -83,7 +82,7 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
           authId,
           email: input.studentEmail,
           role: 'student',
-          status: 'active',
+          status: 'pending',
           name: input.name,
         },
         select: { id: true },
@@ -139,25 +138,11 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
     throw error;
   }
 
-  // Sign in immediately after registration
-  const { data: signInData, error: signInError } = await supabaseAdmin().auth.signInWithPassword({
-    email: input.studentEmail,
-    password: mobile,
-  });
-
-  if (signInError || !signInData.session) {
-    throw serverError('Account created but could not sign in automatically. Use Student Login.');
-  }
-
-  const identity = await buildAuthenticatedUser(authId);
-
+  // Account created with status 'pending'. Do NOT sign in — faculty must approve first.
   return created({
-    session: {
-      accessToken: signInData.session.access_token,
-      refreshToken: signInData.session.refresh_token,
-      expiresAt: signInData.session.expires_at,
-    },
-    user: identity,
+    message: 'Account created successfully! Your profile is pending faculty approval. You will be able to log in once your department faculty approves your account.',
+    registerNumber: input.registerNumber,
+    status: 'pending',
   });
 });
 
