@@ -52,3 +52,6 @@ Thumbs.db
 # Generated evidence exports
 backend/tmp/
 exports/
+
+.vercel
+.env*

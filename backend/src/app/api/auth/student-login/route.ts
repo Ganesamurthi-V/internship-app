@@ -54,13 +54,7 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
     throw unauthorized('Your account has been suspended. Contact your department office.');
   }
 
-  // 3. Sign in via Supabase using their email + mobile as password
-  const { data, error } = await supabaseAdmin().auth.admin.generateLink({
-    type: 'magiclink',
-    email: student.studentEmail,
-  });
-
-  // Use signInWithPassword — the student's Supabase password is their mobile number
+  // 3. Sign in via Supabase — the student's Supabase password is their mobile number.
   const { data: signInData, error: signInError } = await supabaseAdmin().auth.signInWithPassword({
     email: student.studentEmail,
     password: storedMobile,

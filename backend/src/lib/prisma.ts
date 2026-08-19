@@ -40,9 +40,10 @@ function createPrismaClient(): PrismaClient {
 
 export const prisma: PrismaClient = globalForPrisma.prisma ?? createPrismaClient();
 
-if (!isProduction) {
-  globalForPrisma.prisma = prisma;
-}
+// Cached in every environment, not just dev. On a serverless platform each warm
+// instance re-uses this instance instead of opening a second pool against the
+// pgBouncer pooler, which has a small per-project client budget.
+globalForPrisma.prisma = prisma;
 
 /** Narrow alias for functions that accept either the client or a transaction. */
 export type PrismaTransaction = Omit<
