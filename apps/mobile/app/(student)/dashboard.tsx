@@ -1,24 +1,20 @@
 /**
- * Student home.
- *
- * Answers one question above the fold: is today done, and if not, what do I do about
- * it. Everything else on the screen is context.
+ * Student home — redesigned with gradient header, icon cards, and modern layout.
  */
 
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import type { StudentDashboard as StudentDashboardData } from '@ims/shared-types';
-import { SUBMISSION_STATUS_LABELS } from '@ims/shared-types';
-import { Screen } from '@/components/shared/Screen';
-import { Card, SummaryCard } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
-import { ProgressRing } from '@/components/ui/ProgressRing';
-import { StatusPill } from '@/components/ui/StatusPill';
+import { StudentDashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import { useDashboard } from '@/lib/api/hooks';
 import { useAuthStore } from '@/stores/authStore';
-import { colors, fontSize, spacing } from '@/constants/theme';
+import { colors, fontSize, radius, shadow, spacing } from '@/constants/theme';
 
 export default function StudentDashboardScreen() {
+  const insets = useSafeAreaInsets();
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
   const { data, isLoading, isRefetching, refetch, error } = useDashboard();
@@ -27,47 +23,32 @@ export default function StudentDashboardScreen() {
     data?.role === 'student' ? (data.dashboard as StudentDashboardData) : null;
 
   if (isLoading) {
-    return (
-      <Screen>
-        <Text style={styles.muted}>Loading\u2026</Text>
-      </Screen>
-    );
+    return <StudentDashboardSkeleton />;
   }
 
-  if (error) {
+  if (error || !dashboard) {
     return (
-      <Screen>
-        <Card title="Could not load your dashboard">
-          <Text style={styles.muted}>
-            {error instanceof Error ? error.message : 'Something went wrong.'}
+      <View style={styles.container}>
+        <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
+          <Text style={styles.headerTitle}>Dashboard</Text>
+        </LinearGradient>
+        <View style={styles.errorCard}>
+          <MaterialIcons name="error-outline" size={40} color={colors.danger} />
+          <Text style={styles.errorText}>
+            {error instanceof Error ? error.message : 'Could not load dashboard.'}
           </Text>
-          <View style={styles.spacer} />
-          <Button label="Try again" onPress={() => void refetch()} />
-        </Card>
-      </Screen>
-    );
-  }
-
-  if (!dashboard) {
-    // Show diagnostic info so we can tell what went wrong
-    return (
-      <Screen>
-        <Card title="Dashboard unavailable">
-          <Text style={styles.muted}>
-            {data
-              ? `The server responded with role "${data.role}" but the student dashboard could not be loaded.`
-              : 'No response from the server. Make sure the backend is running and try again.'}
-          </Text>
-          <View style={styles.spacer} />
-          <Button label="Try again" onPress={() => void refetch()} />
-          <View style={styles.spacer} />
-          <Button
-            label="Sign out"
-            variant="danger"
+          <Pressable style={styles.retryButton} onPress={() => void refetch()}>
+            <Text style={styles.retryText}>Try again</Text>
+          </Pressable>
+          <Pressable
+            style={styles.signOutButtonError}
             onPress={() => { void logout(); router.replace('/(auth)/login'); }}
-          />
-        </Card>
-      </Screen>
+          >
+            <MaterialIcons name="logout" size={16} color={colors.danger} />
+            <Text style={styles.signOutText}>Sign out</Text>
+          </Pressable>
+        </View>
+      </View>
     );
   }
 
@@ -75,97 +56,198 @@ export default function StudentDashboardScreen() {
   const noQuestions = today.questionCount === 0;
 
   return (
-    <Screen refreshing={isRefetching} onRefresh={() => void refetch()}>
-      <Text style={styles.greeting}>Hello, {dashboard.student.name || user?.name || 'student'}</Text>
-      <Text style={styles.date}>{formatDate(today.date)}</Text>
-
-      {/* ---- The one thing that matters: today ---- */}
-      {noQuestions ? (
-        <Card title="Nothing to answer yet">
-          <Text style={styles.body}>
-            Your department has not set up any questions. Check back later.
-          </Text>
-        </Card>
-      ) : today.submitted ? (
-        <Card title="Today is done">
-          <View style={styles.statusRow}>
-            <StatusPill status={today.status ?? 'pending'} />
-          </View>
-          <Text style={styles.body}>{statusExplanation(today.status)}</Text>
-          <View style={styles.spacer} />
-          <Button
-            label={today.status === 'declined' ? 'Fix and resubmit' : 'View your answers'}
-            variant={today.status === 'declined' ? 'primary' : 'secondary'}
-            onPress={() => router.push('/(student)/answer')}
-          />
-        </Card>
-      ) : (
-        <Card title="Answer today's questions" subtitle="This marks your attendance.">
-          <Text style={styles.body}>
-            {today.questionCount} question{today.questionCount === 1 ? '' : 's'} to answer. Your
-            attendance is recorded once faculty approve your answers.
-          </Text>
-          <View style={styles.spacer} />
-          <Button label="Start" onPress={() => router.push('/(student)/answer')} />
-        </Card>
-      )}
-
-      {/* ---- Running totals ---- */}
-      <Card title="Your attendance">
-        {summary.daysSubmitted === 0 ? (
-          <Text style={styles.muted}>
-            Nothing yet. Your first submission will show up here.
-          </Text>
-        ) : (
-          <View style={styles.summaryRow}>
-            <ProgressRing
-              percentage={summary.approvalPercentage ?? 0}
-              caption={`${summary.daysApproved}/${summary.daysSubmitted} days`}
-            />
-            <View style={styles.summaryFacts}>
-              <Fact label="Approved" value={String(summary.daysApproved)} tone="success" />
-              <Fact label="Awaiting review" value={String(summary.daysPending)} tone="warning" />
-              <Fact label="Declined" value={String(summary.daysDeclined)} tone="danger" />
+    <View style={styles.container}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 32 }}
+      >
+        {/* ---- Gradient Header ---- */}
+        <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
+          <View style={styles.headerRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.headerLabel}>Dashboard</Text>
+              <Text style={styles.headerWelcome}>Welcome back,</Text>
+              <Text style={styles.headerName}>{dashboard.student.name || user?.name || 'Student'}</Text>
+              <View style={styles.scopeBadge}>
+                <MaterialIcons name="school" size={14} color="#ffffffcc" />
+                <Text style={styles.scopeText}>{formatDate(today.date)}</Text>
+              </View>
             </View>
+            <Pressable
+              style={styles.settingsButton}
+              onPress={() => router.push('/(student)/profile')}
+              accessibilityLabel="Profile"
+            >
+              <MaterialIcons name="person" size={24} color="#ffffff" />
+            </Pressable>
           </View>
-        )}
-      </Card>
+        </LinearGradient>
 
-      {/* ---- Recent days ---- */}
-      {dashboard.recentSubmissions.length > 0 ? (
-        <Card title="Recent days">
-          {dashboard.recentSubmissions.map((submission) => (
-            <View key={submission.id} style={styles.recentRow}>
-              <Text style={styles.recentDate}>{submission.submissionDate}</Text>
-              <StatusPill status={submission.status} compact />
+        <View style={styles.content}>
+          {/* ---- Today's Action Card ---- */}
+          <View style={styles.card}>
+            <View style={styles.cardRow}>
+              <View style={[styles.iconCircle, { backgroundColor: noQuestions ? colors.warningBg : today.submitted ? colors.successBg : '#eceef8' }]}>
+                <MaterialIcons
+                  name={noQuestions ? 'info' : today.submitted ? 'check-circle' : 'assignment'}
+                  size={24}
+                  color={noQuestions ? colors.warning : today.submitted ? colors.success : colors.primary}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>
+                  {noQuestions
+                    ? 'Nothing to answer yet'
+                    : today.submitted
+                      ? 'Today is done'
+                      : 'Answer today\'s questions'}
+                </Text>
+                <Text style={styles.cardSubtitle}>
+                  {noQuestions
+                    ? 'Your department has not set up any questions. Check back later.'
+                    : today.submitted
+                      ? statusExplanation(today.status)
+                      : `${today.questionCount} question${today.questionCount === 1 ? '' : 's'} to answer. This marks your attendance.`}
+                </Text>
+              </View>
             </View>
-          ))}
-          <View style={styles.spacer} />
-          <Button
-            label="See all"
-            variant="secondary"
-            onPress={() => router.push('/(student)/history')}
-          />
-        </Card>
-      ) : null}
+            {!noQuestions && (
+              <Pressable
+                style={[styles.actionButton, today.submitted && today.status !== 'declined' && { backgroundColor: colors.primaryLight }]}
+                onPress={() => router.push('/(student)/answer')}
+              >
+                <Text style={styles.actionButtonText}>
+                  {today.submitted
+                    ? today.status === 'declined' ? 'Fix and resubmit' : 'View your answers'
+                    : 'Start answering'}
+                </Text>
+                <MaterialIcons name="chevron-right" size={18} color="#fff" />
+              </Pressable>
+            )}
+            {today.submitted && today.status && (
+              <View style={[styles.statusBadge, statusBadgeColor(today.status)]}>
+                <Text style={[styles.statusBadgeText, { color: statusTextColor(today.status) }]}>
+                  {today.status === 'approved' ? 'Approved' : today.status === 'declined' ? 'Declined' : 'Pending review'}
+                </Text>
+              </View>
+            )}
+          </View>
 
-      <View style={styles.tileRow}>
-        <SummaryCard
-          label="Days approved"
-          value={summary.daysApproved}
-          tone={summary.daysApproved > 0 ? 'success' : 'neutral'}
-        />
-        <SummaryCard
-          label="Awaiting review"
-          value={summary.daysPending}
-          tone={summary.daysPending > 0 ? 'warning' : 'neutral'}
-        />
-      </View>
-    </Screen>
+          {/* ---- Attendance Summary Card ---- */}
+          <View style={styles.card}>
+            <View style={styles.cardHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <MaterialIcons name="bar-chart" size={18} color={colors.primary} />
+                <Text style={styles.sectionTitle}>Your attendance</Text>
+              </View>
+              <Pressable
+                onPress={() => router.push('/(student)/history')}
+                style={{ flexDirection: 'row', alignItems: 'center' }}
+              >
+                <Text style={styles.linkText}>See all</Text>
+                <MaterialIcons name="chevron-right" size={16} color={colors.primary} />
+              </Pressable>
+            </View>
+
+            {summary.daysSubmitted === 0 ? (
+              <Text style={styles.cardSubtitle}>Nothing yet. Your first submission will show up here.</Text>
+            ) : (
+              <View style={styles.statsGrid}>
+                <StatCircle
+                  icon="check-circle"
+                  label="Approved"
+                  value={summary.daysApproved}
+                  color={colors.success}
+                  bgColor={colors.successBg}
+                />
+                <StatCircle
+                  icon="schedule"
+                  label="Pending"
+                  value={summary.daysPending}
+                  color={colors.warning}
+                  bgColor={colors.warningBg}
+                />
+                <StatCircle
+                  icon="cancel"
+                  label="Declined"
+                  value={summary.daysDeclined}
+                  color={colors.danger}
+                  bgColor={colors.dangerBg}
+                />
+                <StatCircle
+                  icon="percent"
+                  label="Approval"
+                  value={`${summary.approvalPercentage ?? 0}%`}
+                  color={colors.primary}
+                  bgColor="#eceef8"
+                />
+              </View>
+            )}
+          </View>
+
+          {/* ---- Action Tiles ---- */}
+          <View style={styles.tileRow}>
+            <Pressable
+              style={[styles.tile, { backgroundColor: colors.successBg }]}
+              onPress={() => router.push('/(student)/history')}
+            >
+              <View style={[styles.tileIcon, { backgroundColor: '#c8e6d5' }]}>
+                <MaterialIcons name="check-circle" size={20} color={colors.success} />
+              </View>
+              <Text style={styles.tileValue}>{summary.daysApproved}</Text>
+              <MaterialIcons name="chevron-right" size={18} color={colors.success} style={styles.tileArrow} />
+              <Text style={styles.tileLabel}>Days approved</Text>
+              <Text style={styles.tileSublabel}>Attendance counted</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.tile, { backgroundColor: colors.warningBg }]}
+              onPress={() => router.push('/(student)/history')}
+            >
+              <View style={[styles.tileIcon, { backgroundColor: '#fce6b3' }]}>
+                <MaterialIcons name="schedule" size={20} color={colors.warning} />
+              </View>
+              <Text style={styles.tileValue}>{summary.daysPending}</Text>
+              <MaterialIcons name="chevron-right" size={18} color={colors.warning} style={styles.tileArrow} />
+              <Text style={styles.tileLabel}>Awaiting review</Text>
+              <Text style={styles.tileSublabel}>Under faculty check</Text>
+            </Pressable>
+          </View>
+
+          {/* ---- Recent Submissions ---- */}
+          {dashboard.recentSubmissions.length > 0 && (
+            <View style={styles.card}>
+              <View style={styles.cardHeaderRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <MaterialIcons name="history" size={18} color={colors.primary} />
+                  <Text style={styles.sectionTitle}>Recent days</Text>
+                </View>
+                <Pressable
+                  onPress={() => router.push('/(student)/history')}
+                  style={{ flexDirection: 'row', alignItems: 'center' }}
+                >
+                  <Text style={styles.linkText}>View all</Text>
+                  <MaterialIcons name="chevron-right" size={16} color={colors.primary} />
+                </Pressable>
+              </View>
+              {dashboard.recentSubmissions.slice(0, 5).map((submission) => (
+                <View key={submission.id} style={styles.recentRow}>
+                  <Text style={styles.recentDate}>{submission.submissionDate}</Text>
+                  <View style={[styles.miniPill, miniPillColor(submission.status)]}>
+                    <Text style={[styles.miniPillText, { color: miniPillTextColor(submission.status) }]}>
+                      {submission.status === 'approved' ? 'Approved' : submission.status === 'declined' ? 'Declined' : 'Pending'}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
-/** Says what the status means for the student, not just what it is called. */
 function statusExplanation(status: StudentDashboardData['today']['status']): string {
   switch (status) {
     case 'approved':
@@ -177,22 +259,50 @@ function statusExplanation(status: StudentDashboardData['today']['status']): str
   }
 }
 
-function Fact({
+function statusBadgeColor(status: string) {
+  if (status === 'approved') return { backgroundColor: colors.successBg };
+  if (status === 'declined') return { backgroundColor: colors.dangerBg };
+  return { backgroundColor: colors.warningBg };
+}
+
+function statusTextColor(status: string) {
+  if (status === 'approved') return colors.success;
+  if (status === 'declined') return colors.danger;
+  return colors.warning;
+}
+
+function miniPillColor(status: string) {
+  if (status === 'approved') return { backgroundColor: colors.successBg };
+  if (status === 'declined') return { backgroundColor: colors.dangerBg };
+  return { backgroundColor: colors.warningBg };
+}
+
+function miniPillTextColor(status: string) {
+  if (status === 'approved') return colors.success;
+  if (status === 'declined') return colors.danger;
+  return colors.warning;
+}
+
+function StatCircle({
+  icon,
   label,
   value,
-  tone,
+  color,
+  bgColor,
 }: {
+  icon: keyof typeof MaterialIcons.glyphMap;
   label: string;
-  value: string;
-  tone: 'success' | 'warning' | 'danger';
+  value: number | string;
+  color: string;
+  bgColor: string;
 }) {
-  const toneColor =
-    tone === 'success' ? colors.success : tone === 'warning' ? colors.warning : colors.danger;
-
   return (
-    <View style={styles.fact}>
-      <Text style={[styles.factValue, { color: toneColor }]}>{value}</Text>
-      <Text style={styles.factLabel}>{label}</Text>
+    <View style={styles.statItem}>
+      <View style={[styles.statCircle, { backgroundColor: bgColor }]}>
+        <MaterialIcons name={icon} size={20} color={color} />
+      </View>
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={[styles.statValue, { color }]}>{value}</Text>
     </View>
   );
 }
@@ -203,44 +313,169 @@ function formatDate(dateOnly: string): string {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
-    year: 'numeric',
     timeZone: 'UTC',
   });
 }
 
 const styles = StyleSheet.create({
-  greeting: {
-    fontSize: fontSize.title,
-    fontWeight: '800',
-    color: colors.text,
+  container: { flex: 1, backgroundColor: colors.background },
+  header: {
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
-  date: { fontSize: fontSize.small, color: colors.textMuted, marginBottom: spacing.md },
-  body: { fontSize: fontSize.body, color: colors.textMuted, lineHeight: 21 },
-  muted: { fontSize: fontSize.body, color: colors.textMuted },
-  spacer: { height: spacing.md },
-  statusRow: { flexDirection: 'row', marginBottom: spacing.sm },
-  summaryRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
-  summaryFacts: { flex: 1, gap: spacing.sm },
-  fact: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
-  factValue: {
-    fontSize: fontSize.subtitle,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: '#fff' },
+  headerLabel: { fontSize: 22, fontWeight: '800', color: '#fff', marginBottom: 4 },
+  headerWelcome: { fontSize: 13, color: '#ffffffcc', marginTop: 4 },
+  headerName: { fontSize: 22, fontWeight: '800', color: '#fff' },
+  scopeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    backgroundColor: '#ffffff20',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
-  factLabel: { fontSize: fontSize.caption, color: colors.textMuted },
+  scopeText: { fontSize: 12, color: '#ffffffcc' },
+  settingsButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#ffffff20',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  content: { padding: 16, gap: 14 },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    ...shadow.card,
+  },
+  cardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  iconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+  cardSubtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2, lineHeight: 18 },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+  linkText: { fontSize: 13, color: colors.primary, fontWeight: '600' },
+  statsGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  statItem: { alignItems: 'center', flex: 1 },
+  statCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  statLabel: { fontSize: 11, color: colors.textMuted, textAlign: 'center' },
+  statValue: { fontSize: 20, fontWeight: '800', marginTop: 2, fontVariant: ['tabular-nums'] },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 12,
+  },
+  actionButtonText: { fontSize: 14, color: '#fff', fontWeight: '700' },
+  statusBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  statusBadgeText: { fontSize: 12, fontWeight: '700' },
+  tileRow: { flexDirection: 'row', gap: 12 },
+  tile: {
+    flex: 1,
+    borderRadius: 16,
+    padding: 16,
+    minHeight: 120,
+  },
+  tileIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  tileValue: { fontSize: 28, fontWeight: '800', color: colors.text, fontVariant: ['tabular-nums'] },
+  tileArrow: { position: 'absolute', top: 16, right: 16 },
+  tileLabel: { fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 4 },
+  tileSublabel: { fontSize: 11, color: colors.textMuted, marginTop: 1 },
   recentRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing.sm,
+    paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  recentDate: {
-    fontSize: fontSize.small,
-    color: colors.text,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
+  recentDate: { fontSize: 13, fontWeight: '600', color: colors.text, fontVariant: ['tabular-nums'] },
+  miniPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 10,
   },
-  tileRow: { flexDirection: 'row', gap: spacing.md, flexWrap: 'wrap' },
+  miniPillText: { fontSize: 11, fontWeight: '700' },
+  signOutButtonError: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    marginTop: 8,
+  },
+  signOutText: { fontSize: 13, color: colors.danger, fontWeight: '700' },
+  errorCard: {
+    margin: 20,
+    padding: 24,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    alignItems: 'center',
+    gap: 12,
+  },
+  errorText: { fontSize: 14, color: colors.textMuted, textAlign: 'center' },
+  retryButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: colors.primary,
+    borderRadius: 8,
+  },
+  retryText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });

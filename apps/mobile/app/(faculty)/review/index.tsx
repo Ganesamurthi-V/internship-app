@@ -14,6 +14,7 @@ import { Screen } from '@/components/shared/Screen';
 import { Card } from '@/components/ui/Card';
 import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
+import { ListSkeleton } from '@/components/ui/SkeletonLoader';
 import { useSubmissionList } from '@/lib/api/hooks';
 import { colors, fontSize, spacing } from '@/constants/theme';
 
@@ -54,7 +55,7 @@ export default function ReviewQueueScreen() {
           </View>
         }
         ListEmptyComponent={
-          isLoading ? null : (
+          isLoading ? <ListSkeleton rows={4} /> : (
             <View style={styles.empty}>
               <MaterialIcons
                 name={filter === 'pending' ? 'check-circle' : 'inbox'}

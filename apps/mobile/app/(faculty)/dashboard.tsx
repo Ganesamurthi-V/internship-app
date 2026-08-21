@@ -1,22 +1,21 @@
 /**
- * Faculty overview.
- *
- * The pending-review count is the number that drives action, so it leads and doubles
- * as the entry point to the queue.
+ * Faculty overview — redesigned with gradient header, icon cards, and modern layout.
  */
 
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import type { FacultyDashboard as FacultyDashboardData } from '@ims/shared-types';
-import { Screen } from '@/components/shared/Screen';
-import { Card, SummaryCard } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
+import { FacultyDashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import { useDashboard } from '@/lib/api/hooks';
 import { useAuthStore } from '@/stores/authStore';
-import { colors, fontSize, spacing } from '@/constants/theme';
+import { colors, fontSize, radius, shadow, spacing } from '@/constants/theme';
 
 export default function FacultyDashboardScreen() {
+  const insets = useSafeAreaInsets();
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
   const { data, isLoading, isRefetching, refetch, error } = useDashboard();
@@ -33,183 +32,393 @@ export default function FacultyDashboardScreen() {
   };
 
   if (isLoading) {
-    return (
-      <Screen>
-        <Text style={styles.muted}>Loading\u2026</Text>
-      </Screen>
-    );
+    return <FacultyDashboardSkeleton />;
   }
 
-  if (error) {
+  if (error || !dashboard) {
     return (
-      <Screen>
-        <Card title="Could not load the dashboard">
-          <Text style={styles.muted}>
-            {error instanceof Error ? error.message : 'Something went wrong.'}
+      <View style={styles.container}>
+        <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
+          <Text style={styles.headerTitle}>Overview</Text>
+        </LinearGradient>
+        <View style={styles.errorCard}>
+          <MaterialIcons name="error-outline" size={40} color={colors.danger} />
+          <Text style={styles.errorText}>
+            {error instanceof Error ? error.message : 'Could not load dashboard.'}
           </Text>
-          <View style={styles.spacer} />
-          <Button label="Try again" onPress={() => void refetch()} />
-        </Card>
-      </Screen>
-    );
-  }
-
-  if (!dashboard) {
-    return (
-      <Screen>
-        <Card title="Nothing to show">
-          <Text style={styles.muted}>
-            Could not load the faculty dashboard. This may happen if you are logged in as a
-            student. Try signing out and logging in with a faculty account.
-          </Text>
-          <View style={styles.spacer} />
-          <Button label="Try again" onPress={() => void refetch()} />
-          <View style={styles.spacer} />
-          <Button label="Sign out" variant="danger" onPress={() => void onSignOut()} loading={signingOut} />
-        </Card>
-      </Screen>
+          <Pressable style={styles.retryButton} onPress={() => void refetch()}>
+            <Text style={styles.retryText}>Try again</Text>
+          </Pressable>
+        </View>
+      </View>
     );
   }
 
   return (
-    <Screen refreshing={isRefetching} onRefresh={() => void refetch()}>
-      <Text style={styles.greeting}>{user?.name ?? 'Faculty'}</Text>
-      <Text style={styles.subtitle}>
-        {dashboard.totalStudents} student{dashboard.totalStudents === 1 ? '' : 's'} in your scope
-      </Text>
-
-      {/* ---- The work waiting ---- */}
-      <Card
-        title={
-          dashboard.pendingReview === 0
-            ? 'Nothing to review'
-            : `${dashboard.pendingReview} waiting for review`
-        }
+    <View style={styles.container}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} tintColor={colors.primary} />}
+        contentContainerStyle={{ paddingBottom: 32 }}
       >
-        {dashboard.pendingReview === 0 ? (
-          <Text style={styles.muted}>You are all caught up.</Text>
-        ) : (
-          <>
-            <Text style={styles.body}>
-              Students are waiting on a decision. Approving marks their day as attended.
-            </Text>
-            <View style={styles.spacer} />
-            <Button label="Open review queue" onPress={() => router.push('/(faculty)/review')} />
-          </>
-        )}
-      </Card>
+        {/* ---- Gradient Header ---- */}
+        <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
+          <View style={styles.headerRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.headerLabel}>Overview</Text>
+              <Text style={styles.headerWelcome}>Welcome back,</Text>
+              <Text style={styles.headerName}>{user?.name ?? 'Faculty'}</Text>
+              <View style={styles.scopeBadge}>
+                <MaterialIcons name="groups" size={14} color="#ffffffcc" />
+                <Text style={styles.scopeText}>
+                  {dashboard.totalStudents} student{dashboard.totalStudents === 1 ? '' : 's'} in your scope
+                </Text>
+              </View>
+            </View>
+            <Pressable style={styles.settingsButton} accessibilityLabel="Settings">
+              <MaterialIcons name="settings" size={24} color="#ffffff" />
+            </Pressable>
+          </View>
+        </LinearGradient>
 
-      {/* ---- Today at a glance ---- */}
-      <Card title="Today">
-        <View style={styles.factList}>
-          <Fact label="Submitted" value={dashboard.submittedToday} tone="neutral" />
-          <Fact label="Approved" value={dashboard.approvedToday} tone="success" />
-          <Fact label="Declined" value={dashboard.declinedToday} tone="danger" />
-          <Fact label="Not submitted" value={dashboard.missingToday} tone="warning" />
+        <View style={styles.content}>
+          {/* ---- Pending Review Card ---- */}
+          <View style={styles.card}>
+            <View style={styles.cardRow}>
+              <View style={[styles.iconCircle, { backgroundColor: '#eceef8' }]}>
+                <MaterialIcons name="rate-review" size={24} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>
+                  {dashboard.pendingReview === 0
+                    ? 'No students waiting'
+                    : `${dashboard.pendingReview} student${dashboard.pendingReview === 1 ? '' : 's'} waiting for review`}
+                </Text>
+                <Text style={styles.cardSubtitle}>
+                  {dashboard.pendingReview === 0
+                    ? 'You are all caught up.'
+                    : 'Students are waiting on a decision.\nApproving marks their day as attended.'}
+                </Text>
+              </View>
+              {dashboard.pendingReview > 0 && (
+                <Pressable
+                  style={styles.actionButton}
+                  onPress={() => router.push('/(faculty)/review')}
+                >
+                  <Text style={styles.actionButtonText}>Open review queue</Text>
+                  <MaterialIcons name="chevron-right" size={18} color="#fff" />
+                </Pressable>
+              )}
+            </View>
+          </View>
+
+          {/* ---- Today's Summary Card ---- */}
+          <View style={styles.card}>
+            <View style={styles.cardHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <MaterialIcons name="calendar-today" size={18} color={colors.primary} />
+                <Text style={styles.sectionTitle}>Today's summary</Text>
+              </View>
+              <Pressable
+                onPress={() => router.push('/(faculty)/students')}
+                style={{ flexDirection: 'row', alignItems: 'center' }}
+              >
+                <Text style={styles.linkText}>View details</Text>
+                <MaterialIcons name="chevron-right" size={16} color={colors.primary} />
+              </Pressable>
+            </View>
+
+            <View style={styles.statsGrid}>
+              <StatCircle
+                icon="send"
+                label="Submitted"
+                value={dashboard.submittedToday}
+                color="#414fb8"
+                bgColor="#eceef8"
+              />
+              <StatCircle
+                icon="check-circle"
+                label="Approved"
+                value={dashboard.approvedToday}
+                color={colors.success}
+                bgColor={colors.successBg}
+              />
+              <StatCircle
+                icon="cancel"
+                label="Declined"
+                value={dashboard.declinedToday}
+                color={colors.danger}
+                bgColor={colors.dangerBg}
+              />
+              <StatCircle
+                icon="schedule"
+                label="Not submitted"
+                value={dashboard.missingToday}
+                color={colors.warning}
+                bgColor={colors.warningBg}
+              />
+            </View>
+
+            <Pressable
+              style={styles.outlineButton}
+              onPress={() => router.push('/(faculty)/students')}
+            >
+              <MaterialIcons name="groups" size={18} color={colors.textMuted} />
+              <Text style={styles.outlineButtonText}>See who has not submitted</Text>
+              <MaterialIcons name="chevron-right" size={18} color={colors.textMuted} />
+            </Pressable>
+          </View>
+
+          {/* ---- Action Tiles ---- */}
+          <View style={styles.tileRow}>
+            <Pressable
+              style={[styles.tile, { backgroundColor: '#fff8e6' }]}
+              onPress={() => router.push('/(faculty)/review')}
+            >
+              <View style={[styles.tileIcon, { backgroundColor: '#fff0c2' }]}>
+                <MaterialIcons name="fact-check" size={20} color={colors.warning} />
+              </View>
+              <Text style={styles.tileValue}>{dashboard.pendingReview}</Text>
+              <MaterialIcons name="chevron-right" size={18} color={colors.warning} style={styles.tileArrow} />
+              <Text style={styles.tileLabel}>Awaiting review</Text>
+              <Text style={styles.tileSublabel}>Needs your decision</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.tile, { backgroundColor: '#f0f1ff' }]}
+              onPress={() => router.push('/(faculty)/questions')}
+            >
+              <View style={[styles.tileIcon, { backgroundColor: '#e0e3ff' }]}>
+                <MaterialIcons name="help-outline" size={20} color={colors.primary} />
+              </View>
+              <Text style={styles.tileValue}>{dashboard.activeQuestions}</Text>
+              <MaterialIcons name="chevron-right" size={18} color={colors.primary} style={styles.tileArrow} />
+              <Text style={styles.tileLabel}>Active questions</Text>
+              <Text style={styles.tileSublabel}>Require attention</Text>
+            </Pressable>
+          </View>
+
+          {/* ---- Student Registrations Card ---- */}
+          <View style={styles.card}>
+            <View style={styles.cardRow}>
+              <View style={[styles.iconCircle, { backgroundColor: '#eceef8' }]}>
+                <MaterialIcons name="person-add" size={24} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>Student Registrations</Text>
+                <Text style={styles.cardSubtitle}>
+                  New students need your approval before they{'\n'}can log in and start submitting.
+                </Text>
+              </View>
+            </View>
+            <Pressable
+              style={styles.outlineButton}
+              onPress={() => router.push('/(faculty)/students/pending')}
+            >
+              <Text style={styles.outlineButtonText}>View pending approvals</Text>
+              <MaterialIcons name="chevron-right" size={18} color={colors.textMuted} />
+            </Pressable>
+          </View>
+
+          {/* ---- Account Card ---- */}
+          <View style={styles.card}>
+            <View style={styles.cardRow}>
+              <View style={[styles.iconCircle, { backgroundColor: '#eceef8' }]}>
+                <MaterialIcons name="account-circle" size={24} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>Account</Text>
+                <Text style={styles.cardSubtitle}>
+                  Signed in as{'\n'}{user?.email ?? 'faculty'}
+                </Text>
+              </View>
+              <Pressable
+                style={styles.signOutButton}
+                onPress={() => void onSignOut()}
+                disabled={signingOut}
+              >
+                <MaterialIcons name="logout" size={16} color={colors.danger} />
+                <Text style={styles.signOutText}>Sign out</Text>
+              </Pressable>
+            </View>
+          </View>
         </View>
-        <View style={styles.spacer} />
-        <Button
-          label="See who has not submitted"
-          variant="secondary"
-          onPress={() => router.push('/(faculty)/students')}
-        />
-      </Card>
-
-      <View style={styles.tileRow}>
-        <SummaryCard
-          label="Awaiting review"
-          value={dashboard.pendingReview}
-          tone={dashboard.pendingReview > 0 ? 'warning' : 'success'}
-          onPress={() => router.push('/(faculty)/review')}
-        />
-        <SummaryCard
-          label="Active questions"
-          value={dashboard.activeQuestions}
-          tone={dashboard.activeQuestions === 0 ? 'danger' : 'neutral'}
-          onPress={() => router.push('/(faculty)/questions')}
-        />
-      </View>
-
-      {/* Without questions there is nothing for students to answer, which makes this
-          the most important thing on the screen when it happens. */}
-      {dashboard.activeQuestions === 0 ? (
-        <Card title="No questions set up">
-          <Text style={styles.body}>
-            Students cannot submit anything until at least one question exists. Add one to start
-            collecting attendance.
-          </Text>
-          <View style={styles.spacer} />
-          <Button label="Add a question" onPress={() => router.push('/(faculty)/questions')} />
-        </Card>
-      ) : null}
-
-      {/* ---- Pending student approvals ---- */}
-      <Card title="Student Registrations">
-        <Text style={styles.body}>
-          New students need your approval before they can log in and start submitting.
-        </Text>
-        <View style={styles.spacer} />
-        <Button
-          label="View pending approvals"
-          variant="secondary"
-          onPress={() => router.push('/(faculty)/students/pending')}
-        />
-      </Card>
-
-      {/* ---- Sign out ---- */}
-      <Card title="Account">
-        <Text style={styles.muted}>Signed in as {user?.email ?? 'faculty'}.</Text>
-        <View style={styles.spacer} />
-        <Button
-          label="Sign out"
-          variant="danger"
-          onPress={() => void onSignOut()}
-          loading={signingOut}
-        />
-      </Card>
-    </Screen>
+      </ScrollView>
+    </View>
   );
 }
 
-function Fact({
+function StatCircle({
+  icon,
   label,
   value,
-  tone,
+  color,
+  bgColor,
 }: {
+  icon: keyof typeof MaterialIcons.glyphMap;
   label: string;
   value: number;
-  tone: 'neutral' | 'success' | 'warning' | 'danger';
+  color: string;
+  bgColor: string;
 }) {
-  const toneColor =
-    tone === 'success'
-      ? colors.success
-      : tone === 'warning'
-        ? colors.warning
-        : tone === 'danger'
-          ? colors.danger
-          : colors.text;
-
   return (
-    <View style={styles.fact}>
-      <Text style={styles.factLabel}>{label}</Text>
-      <Text style={[styles.factValue, { color: toneColor }]}>{value}</Text>
+    <View style={styles.statItem}>
+      <View style={[styles.statCircle, { backgroundColor: bgColor }]}>
+        <MaterialIcons name={icon} size={20} color={color} />
+      </View>
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={[styles.statValue, { color }]}>{value}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  greeting: { fontSize: fontSize.title, fontWeight: '800', color: colors.text },
-  subtitle: { fontSize: fontSize.small, color: colors.textMuted, marginBottom: spacing.md },
-  body: { fontSize: fontSize.body, color: colors.textMuted, lineHeight: 21 },
-  muted: { fontSize: fontSize.body, color: colors.textMuted },
-  spacer: { height: spacing.md },
-  factList: { gap: spacing.sm },
-  fact: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
-  factLabel: { fontSize: fontSize.small, color: colors.textMuted },
-  factValue: {
-    fontSize: fontSize.subtitle,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
+  container: { flex: 1, backgroundColor: colors.background },
+  header: {
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
-  tileRow: { flexDirection: 'row', gap: spacing.md, flexWrap: 'wrap' },
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: '#fff' },
+  headerLabel: { fontSize: 22, fontWeight: '800', color: '#fff', marginBottom: 4 },
+  headerWelcome: { fontSize: 13, color: '#ffffffcc', marginTop: 4 },
+  headerName: { fontSize: 22, fontWeight: '800', color: '#fff' },
+  scopeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    backgroundColor: '#ffffff20',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  scopeText: { fontSize: 12, color: '#ffffffcc' },
+  settingsButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#ffffff20',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  content: { padding: 16, gap: 14 },
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    ...shadow.card,
+  },
+  cardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  iconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+  cardSubtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2, lineHeight: 18 },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+  linkText: { fontSize: 13, color: colors.primary, fontWeight: '600' },
+  statsGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  statItem: { alignItems: 'center', flex: 1 },
+  statCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  statLabel: { fontSize: 11, color: colors.textMuted, textAlign: 'center' },
+  statValue: { fontSize: 20, fontWeight: '800', marginTop: 2, fontVariant: ['tabular-nums'] },
+  outlineButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginTop: 12,
+  },
+  outlineButtonText: { fontSize: 13, color: colors.textMuted, fontWeight: '600' },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 8,
+  },
+  actionButtonText: { fontSize: 13, color: '#fff', fontWeight: '700' },
+  tileRow: { flexDirection: 'row', gap: 12 },
+  tile: {
+    flex: 1,
+    borderRadius: 16,
+    padding: 16,
+    minHeight: 120,
+  },
+  tileIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  tileValue: { fontSize: 28, fontWeight: '800', color: colors.text, fontVariant: ['tabular-nums'] },
+  tileArrow: { position: 'absolute', top: 16, right: 16 },
+  tileLabel: { fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 4 },
+  tileSublabel: { fontSize: 11, color: colors.textMuted, marginTop: 1 },
+  signOutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.danger,
+  },
+  signOutText: { fontSize: 13, color: colors.danger, fontWeight: '700' },
+  errorCard: {
+    margin: 20,
+    padding: 24,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    alignItems: 'center',
+    gap: 12,
+  },
+  errorText: { fontSize: 14, color: colors.textMuted, textAlign: 'center' },
+  retryButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: colors.primary,
+    borderRadius: 8,
+  },
+  retryText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });

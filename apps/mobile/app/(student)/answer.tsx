@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
+import { FormSkeleton } from '@/components/ui/SkeletonLoader';
 import { ApiError } from '@/lib/api/client';
 import { useSubmitAnswers, useTodayForm } from '@/lib/api/hooks';
 import { uploadFile, validateFile, type PickedFile } from '@/lib/api/upload';
@@ -164,11 +165,7 @@ export default function AnswerScreen() {
   };
 
   if (isLoading && !form) {
-    return (
-      <Screen>
-        <Text style={styles.muted}>Loading today\u2019s questions\u2026</Text>
-      </Screen>
-    );
+    return <FormSkeleton fields={3} />;
   }
 
   if (error && !form) {

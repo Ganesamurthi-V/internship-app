@@ -14,6 +14,7 @@ import { Card } from '@/components/ui/Card';
 import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { TextField } from '@/components/ui/TextField';
+import { ListSkeleton } from '@/components/ui/SkeletonLoader';
 import { useStudentList } from '@/lib/api/hooks';
 import { colors, fontSize, spacing } from '@/constants/theme';
 
@@ -64,7 +65,7 @@ export default function StudentsScreen() {
           </View>
         }
         ListEmptyComponent={
-          isLoading ? null : (
+          isLoading ? <ListSkeleton rows={5} /> : (
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>No students found</Text>
               <Text style={styles.emptyBody}>

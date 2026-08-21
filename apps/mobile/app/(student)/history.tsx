@@ -14,6 +14,7 @@ import { Screen } from '@/components/shared/Screen';
 import { Card } from '@/components/ui/Card';
 import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
+import { ListSkeleton } from '@/components/ui/SkeletonLoader';
 import { useSubmissionList } from '@/lib/api/hooks';
 import { colors, fontSize, radius, spacing } from '@/constants/theme';
 
@@ -59,7 +60,7 @@ export default function StudentHistoryScreen() {
           </View>
         }
         ListEmptyComponent={
-          isLoading ? null : (
+          isLoading ? <ListSkeleton rows={4} /> : (
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>Nothing here yet</Text>
               <Text style={styles.emptyBody}>

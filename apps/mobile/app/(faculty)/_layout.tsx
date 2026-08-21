@@ -1,15 +1,10 @@
 /**
- * Faculty and admin tabs.
- *
- * Admins share this group: their capabilities are identical and only their data scope
- * differs, so a separate navigator would be two copies of the same screens.
- *
- * Four tabs: the overview, the review queue (where the work is), the student
- * directory, and question management.
+ * Faculty and admin tabs — redesigned bottom tab bar with active indicator line.
  */
 
 import { Redirect, Tabs } from 'expo-router';
-import { Platform } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
+import type { ColorValue } from 'react-native';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { colors, fontSize } from '@/constants/theme';
 import { useAuthStore } from '@/stores/authStore';
@@ -24,27 +19,35 @@ export default function FacultyLayout() {
   return (
     <Tabs
       screenOptions={{
-        headerStyle: { backgroundColor: colors.primary },
-        headerTintColor: colors.onPrimary,
-        headerTitleStyle: { fontWeight: '600' },
+        headerShown: false,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,
-        tabBarLabelStyle: { fontSize: fontSize.caption, fontWeight: '600' },
-        tabBarStyle: {
-          backgroundColor: colors.surface,
-          borderTopColor: colors.border,
-          height: Platform.OS === 'ios' ? 88 : 60,
-          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
-          paddingTop: 6,
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '600',
+          marginTop: 2,
         },
+        tabBarStyle: {
+          backgroundColor: '#ffffff',
+          borderTopWidth: 0,
+          height: Platform.OS === 'ios' ? 88 : 64,
+          paddingBottom: Platform.OS === 'ios' ? 24 : 10,
+          paddingTop: 8,
+          elevation: 12,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: -2 },
+          shadowOpacity: 0.06,
+          shadowRadius: 8,
+        },
+        tabBarIconStyle: { marginBottom: 0 },
       }}
     >
       <Tabs.Screen
         name="dashboard"
         options={{
           title: 'Overview',
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="dashboard" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="grid-view" color={color} focused={focused} />
           ),
         }}
       />
@@ -52,9 +55,8 @@ export default function FacultyLayout() {
         name="review"
         options={{
           title: 'Review',
-          headerShown: false,
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="fact-check" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="fact-check" color={color} focused={focused} />
           ),
         }}
       />
@@ -62,9 +64,8 @@ export default function FacultyLayout() {
         name="students"
         options={{
           title: 'Students',
-          headerShown: false,
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="groups" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="groups" color={color} focused={focused} />
           ),
         }}
       />
@@ -72,8 +73,8 @@ export default function FacultyLayout() {
         name="questions"
         options={{
           title: 'Questions',
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="help-outline" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="help-outline" color={color} focused={focused} />
           ),
         }}
       />
@@ -81,13 +82,33 @@ export default function FacultyLayout() {
         name="manage-faculty"
         options={{
           title: 'Faculty',
-          // Only show this tab for admin; faculty don't manage other faculty
           href: role === 'admin' ? undefined : null,
-          tabBarIcon: ({ color, size }) => (
-            <MaterialIcons name="admin-panel-settings" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="admin-panel-settings" color={color} focused={focused} />
           ),
         }}
       />
     </Tabs>
   );
 }
+
+function TabIcon({ name, color, focused }: { name: keyof typeof MaterialIcons.glyphMap; color: ColorValue; focused: boolean }) {
+  return (
+    <View style={tabStyles.iconWrap}>
+      <MaterialIcons name={name} size={22} color={color as string} />
+      {focused && <View style={tabStyles.indicator} />}
+    </View>
+  );
+}
+
+const tabStyles = StyleSheet.create({
+  iconWrap: { alignItems: 'center', position: 'relative' },
+  indicator: {
+    position: 'absolute',
+    bottom: -8,
+    width: 20,
+    height: 2.5,
+    borderRadius: 2,
+    backgroundColor: colors.primary,
+  },
+});
