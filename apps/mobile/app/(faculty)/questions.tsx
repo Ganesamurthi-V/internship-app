@@ -1,15 +1,17 @@
 /**
- * Question management.
- *
- * The questions defined here are what every student answers each day, so the screen
- * makes the consequence visible: an empty list means nobody can submit anything.
- *
- * Retiring rather than deleting is surfaced in the confirm dialog, because a reviewer
- * needs to know past answers survive.
+ * Question management — redesigned with gradient header, drag-to-reorder,
+ * and card-based layout matching the app design system.
  */
 
-import { useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import DraggableFlatList, {
+  ScaleDecorator,
+  type RenderItemParams,
+} from 'react-native-draggable-flatlist';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import type { Question, QuestionType } from '@ims/shared-types';
 import {
@@ -19,7 +21,6 @@ import {
   QUESTION_TYPE_LABELS,
   QUESTION_TYPES,
 } from '@ims/shared-types';
-import { Screen } from '@/components/shared/Screen';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
@@ -29,9 +30,10 @@ import {
   useCreateQuestion,
   useDeleteQuestion,
   useQuestions,
+  useReorderQuestions,
   useUpdateQuestion,
 } from '@/lib/api/hooks';
-import { colors, fontSize, radius, spacing } from '@/constants/theme';
+import { colors, fontSize, radius, shadow, spacing } from '@/constants/theme';
 
 const TYPE_OPTIONS = QUESTION_TYPES.map((type) => ({
   value: type,
@@ -39,13 +41,16 @@ const TYPE_OPTIONS = QUESTION_TYPES.map((type) => ({
 }));
 
 export default function QuestionsScreen() {
-  // Include retired ones: a reviewer needs to see what exists before adding a duplicate.
-  const { data: questions, isLoading, isRefetching, refetch } = useQuestions(false);
+  const insets = useSafeAreaInsets();
+  const { data: questions, isLoading, refetch } = useQuestions(false);
   const createQuestion = useCreateQuestion();
   const updateQuestion = useUpdateQuestion();
   const deleteQuestion = useDeleteQuestion();
+  const reorderQuestions = useReorderQuestions();
 
   const [showForm, setShowForm] = useState(false);
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
   const [helpText, setHelpText] = useState('');
   const [type, setType] = useState<QuestionType>('long_text');
@@ -53,8 +58,7 @@ export default function QuestionsScreen() {
   const [choiceOptions, setChoiceOptions] = useState<string[]>(['', '']);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const active = (questions ?? []).filter((question) => question.isActive);
-  const retired = (questions ?? []).filter((question) => !question.isActive);
+  const active = (questions ?? []).filter((q) => q.isActive);
 
   const resetForm = (): void => {
     setPrompt('');
@@ -64,11 +68,11 @@ export default function QuestionsScreen() {
     setChoiceOptions(['', '']);
     setErrors({});
     setShowForm(false);
+    setEditingId(null);
   };
 
-  const onCreate = async (): Promise<void> => {
+  const onSave = async (): Promise<void> => {
     setErrors({});
-
     const trimmed = prompt.trim();
     if (trimmed.length < 3) {
       setErrors({ prompt: 'Write the question.' });
@@ -77,9 +81,7 @@ export default function QuestionsScreen() {
 
     const options =
       type === 'choice'
-        ? choiceOptions
-            .map((opt) => opt.trim())
-            .filter((opt) => opt.length > 0)
+        ? choiceOptions.map((opt) => opt.trim()).filter((opt) => opt.length > 0)
         : undefined;
 
     if (type === 'choice' && (!options || options.length < 2)) {
@@ -88,18 +90,30 @@ export default function QuestionsScreen() {
     }
 
     try {
-      await createQuestion.mutateAsync({
-        prompt: trimmed,
-        helpText: helpText.trim().length > 0 ? helpText.trim() : null,
-        type,
-        required,
-        sortOrder: (active.length + 1) * 10,
-        options: options ?? null,
-        minLength: null,
-        maxLength: type === 'long_text' ? ANSWER_MAX_LENGTH : null,
-        departmentId: null,
-        referenceDocId: null,
-      });
+      if (editingId) {
+        await updateQuestion.mutateAsync({
+          questionId: editingId,
+          prompt: trimmed,
+          helpText: helpText.trim().length > 0 ? helpText.trim() : null,
+          type,
+          required,
+          options: options ?? null,
+          maxLength: type === 'long_text' ? ANSWER_MAX_LENGTH : null,
+        });
+      } else {
+        await createQuestion.mutateAsync({
+          prompt: trimmed,
+          helpText: helpText.trim().length > 0 ? helpText.trim() : null,
+          type,
+          required,
+          sortOrder: (active.length + 1) * 10,
+          options: options ?? null,
+          minLength: null,
+          maxLength: type === 'long_text' ? ANSWER_MAX_LENGTH : null,
+          departmentId: null,
+          referenceDocId: null,
+        });
+      }
       resetForm();
     } catch (error) {
       if (error instanceof ApiError) {
@@ -111,11 +125,17 @@ export default function QuestionsScreen() {
     }
   };
 
-  const onToggleActive = (question: Question): void => {
-    void updateQuestion.mutateAsync({
-      questionId: question.id,
-      isActive: !question.isActive,
-    });
+  const onEdit = (question: Question): void => {
+    setMenuOpenId(null);
+    // Pre-fill the form with the question's current values
+    setPrompt(question.prompt);
+    setHelpText(question.helpText ?? '');
+    setType(question.type);
+    setRequired(question.required);
+    setChoiceOptions(question.options && question.options.length > 0 ? [...question.options] : ['', '']);
+    setShowForm(true);
+    // Store the editing question id so we can update instead of create
+    setEditingId(question.id);
   };
 
   const onRemove = (question: Question): void => {
@@ -145,285 +165,381 @@ export default function QuestionsScreen() {
     );
   };
 
-  return (
-    <Screen refreshing={isRefetching} onRefresh={() => void refetch()}>
-      {/* The consequence of an empty list, stated plainly. */}
-      {!isLoading && active.length === 0 ? (
-        <View style={styles.warnBox}>
-          <MaterialIcons name="warning" size={18} color={colors.warning} />
-          <Text style={styles.warnText}>
-            No active questions. Students cannot submit anything until you add one.
-          </Text>
-        </View>
-      ) : null}
+  const onDragEnd = useCallback(
+    ({ data }: { data: Question[] }) => {
+      const order = data.map((q, index) => ({
+        id: q.id,
+        sortOrder: (index + 1) * 10,
+      }));
+      void reorderQuestions.mutateAsync(order);
+    },
+    [reorderQuestions],
+  );
 
-      {showForm ? (
-        <Card title="New question">
-          <TextField
-            label="Question"
-            value={prompt}
-            onChangeText={setPrompt}
-            multiline
-            placeholder="e.g. What did you work on today?"
-            maxLength={QUESTION_PROMPT_MAX_LENGTH}
-            error={errors.prompt}
-            required
-          />
+  const renderItem = useCallback(
+    ({ item, drag, isActive: isDragging, getIndex }: RenderItemParams<Question>) => {
+      const index = (getIndex() ?? 0) + 1;
+      return (
+        <ScaleDecorator>
+          <View style={[styles.questionCard, isDragging && styles.questionCardDragging]}>
+            {/* Drag handle */}
+            <Pressable onLongPress={drag} style={styles.dragHandle} accessibilityLabel="Drag to reorder">
+              <MaterialIcons name="drag-indicator" size={22} color={colors.textMuted} />
+            </Pressable>
 
-          <TextField
-            label="Help text"
-            value={helpText}
-            onChangeText={setHelpText}
-            placeholder="Optional guidance shown under the question"
-            error={errors.helpText}
-          />
+            {/* Number */}
+            <View style={styles.numberCircle}>
+              <Text style={styles.numberText}>{index}</Text>
+            </View>
 
-          <ChipGroup
-            label="Answer type"
-            options={TYPE_OPTIONS}
-            value={type}
-            onChange={(next) => setType(next)}
-          />
+            {/* Content */}
+            <View style={styles.questionContent}>
+              <Text style={styles.questionPrompt}>{item.prompt}</Text>
+              {item.helpText ? <Text style={styles.questionHelp}>{item.helpText}</Text> : null}
 
-          {type === 'choice' ? (
-            <View style={styles.optionsSection}>
-              <Text style={styles.optionsLabel}>
-                Options <Text style={styles.required}>*</Text>
-              </Text>
-              {choiceOptions.map((option, index) => (
-                <View key={index} style={styles.optionRow}>
-                  <View style={styles.optionInputWrap}>
-                    <TextField
-                      label=""
-                      value={option}
-                      onChangeText={(text) => {
-                        const next = [...choiceOptions];
-                        next[index] = text;
-                        setChoiceOptions(next);
-                      }}
-                      placeholder={`Option ${index + 1}`}
-                    />
-                  </View>
-                  {choiceOptions.length > 2 ? (
-                    <Text
-                      style={styles.optionRemove}
-                      onPress={() => {
-                        setChoiceOptions(choiceOptions.filter((_, i) => i !== index));
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Remove option ${index + 1}`}
-                    >
-                      ✕
-                    </Text>
-                  ) : null}
+              {/* Badges */}
+              <View style={styles.badgeRow}>
+                <View style={styles.typeBadge}>
+                  <Text style={styles.typeBadgeText}>{QUESTION_TYPE_LABELS[item.type]}</Text>
                 </View>
-              ))}
-              {choiceOptions.length < 10 ? (
-                <View style={styles.addOptionRow}>
-                  <Text
-                    style={styles.addOptionLink}
-                    onPress={() => setChoiceOptions([...choiceOptions, ''])}
-                    accessibilityRole="button"
-                  >
-                    + Add option
+                <View style={[styles.requiredBadge, item.required ? styles.requiredBadgeActive : styles.optionalBadge]}>
+                  <MaterialIcons
+                    name={item.required ? 'check-circle' : 'stars'}
+                    size={12}
+                    color={item.required ? colors.success : colors.warning}
+                  />
+                  <Text style={[styles.requiredBadgeText, { color: item.required ? colors.success : colors.warning }]}>
+                    {item.required ? 'Required' : 'Optional'}
                   </Text>
                 </View>
-              ) : null}
-              {errors.options ? (
-                <Text style={styles.fieldError}>{errors.options}</Text>
-              ) : null}
+              </View>
             </View>
-          ) : null}
 
-          <ChipGroup
-            label="Is an answer required?"
-            options={[
-              { value: 'yes', label: 'Required' },
-              { value: 'no', label: 'Optional' },
-            ]}
-            value={required ? 'yes' : 'no'}
-            onChange={(next) => setRequired(next === 'yes')}
-          />
+            {/* Three-dot menu button */}
+            <Pressable style={styles.moreButton} onPress={() => setMenuOpenId(item.id)}>
+              <MaterialIcons name="more-vert" size={20} color={colors.textMuted} />
+            </Pressable>
+          </View>
+        </ScaleDecorator>
+      );
+    },
+    [],
+  );
 
-          {errors._ ? (
-            <View accessibilityLiveRegion="polite">
+  const ListHeader = (
+    <>
+      {/* Add question card */}
+      <Pressable
+        style={styles.addCard}
+        onPress={() => setShowForm(true)}
+        disabled={active.length >= MAX_ACTIVE_QUESTIONS}
+      >
+        <View style={styles.addIconCircle}>
+          <MaterialIcons name="add" size={20} color={colors.primary} />
+        </View>
+        <Text style={styles.addText}>Add a question</Text>
+        <MaterialIcons name="chevron-right" size={20} color={colors.textMuted} style={{ marginLeft: 'auto' }} />
+      </Pressable>
+
+      {/* Create form */}
+      {showForm && (
+        <View style={styles.formCard}>
+          <Card title="New question">
+            <TextField
+              label="Question"
+              value={prompt}
+              onChangeText={setPrompt}
+              multiline
+              placeholder="e.g. What did you work on today?"
+              maxLength={QUESTION_PROMPT_MAX_LENGTH}
+              error={errors.prompt}
+              required
+            />
+            <TextField
+              label="Help text"
+              value={helpText}
+              onChangeText={setHelpText}
+              placeholder="Optional guidance shown under the question"
+              error={errors.helpText}
+            />
+            <ChipGroup
+              label="Answer type"
+              options={TYPE_OPTIONS}
+              value={type}
+              onChange={(next) => setType(next)}
+            />
+
+            {type === 'choice' ? (
+              <View style={styles.optionsSection}>
+                <Text style={styles.optionsLabel}>
+                  Options <Text style={styles.requiredStar}>*</Text>
+                </Text>
+                {choiceOptions.map((option, index) => (
+                  <View key={index} style={styles.optionRow}>
+                    <View style={{ flex: 1 }}>
+                      <TextField
+                        label=""
+                        value={option}
+                        onChangeText={(text) => {
+                          const next = [...choiceOptions];
+                          next[index] = text;
+                          setChoiceOptions(next);
+                        }}
+                        placeholder={`Option ${index + 1}`}
+                      />
+                    </View>
+                    {choiceOptions.length > 2 ? (
+                      <Pressable
+                        onPress={() => setChoiceOptions(choiceOptions.filter((_, i) => i !== index))}
+                        style={styles.removeOptionBtn}
+                      >
+                        <MaterialIcons name="close" size={18} color={colors.danger} />
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ))}
+                {choiceOptions.length < 10 && (
+                  <Pressable
+                    style={styles.addOptionBtn}
+                    onPress={() => setChoiceOptions([...choiceOptions, ''])}
+                  >
+                    <MaterialIcons name="add-circle-outline" size={16} color={colors.primary} />
+                    <Text style={styles.addOptionText}>Add option</Text>
+                  </Pressable>
+                )}
+                {errors.options ? <Text style={styles.fieldError}>{errors.options}</Text> : null}
+              </View>
+            ) : null}
+
+            <ChipGroup
+              label="Is an answer required?"
+              options={[
+                { value: 'yes', label: 'Required' },
+                { value: 'no', label: 'Optional' },
+              ]}
+              value={required ? 'yes' : 'no'}
+              onChange={(next) => setRequired(next === 'yes')}
+            />
+
+            {errors._ ? (
               <Text style={styles.formError}>{errors._}</Text>
-              <View style={styles.spacer} />
-            </View>
-          ) : null}
+            ) : null}
 
-          <Button
-            label="Add question"
-            onPress={() => void onCreate()}
-            loading={createQuestion.isPending}
-          />
-          <View style={styles.spacer} />
-          <Button label="Cancel" variant="secondary" onPress={resetForm} />
-        </Card>
-      ) : (
-        <Card>
-          <Text style={styles.muted}>
-            {active.length} of {MAX_ACTIVE_QUESTIONS} active question
-            {active.length === 1 ? '' : 's'}. These are what every student answers each day.
-          </Text>
-          <View style={styles.spacer} />
-          <Button
-            label="Add a question"
-            onPress={() => setShowForm(true)}
-            disabled={active.length >= MAX_ACTIVE_QUESTIONS}
-          />
-          {active.length >= MAX_ACTIVE_QUESTIONS ? (
-            <Text style={styles.hint}>
-              Retire one before adding another.
-            </Text>
-          ) : null}
-        </Card>
+            <View style={{ gap: 8, marginTop: 12 }}>
+              <Button label={editingId ? 'Save changes' : 'Add question'} onPress={() => void onSave()} loading={createQuestion.isPending || updateQuestion.isPending} />
+              <Button label="Cancel" variant="secondary" onPress={resetForm} />
+            </View>
+          </Card>
+        </View>
       )}
 
-      {/* ---- Active ---- */}
-      {active.map((question, index) => (
-        <QuestionCard
-          key={question.id}
-          index={index + 1}
-          question={question}
-          onToggle={() => onToggleActive(question)}
-          onRemove={() => onRemove(question)}
-        />
-      ))}
-
-      {/* ---- Retired ---- */}
-      {retired.length > 0 ? (
-        <>
-          <Text style={styles.sectionLabel}>Retired</Text>
-          {retired.map((question) => (
-            <QuestionCard
-              key={question.id}
-              question={question}
-              onToggle={() => onToggleActive(question)}
-              onRemove={() => onRemove(question)}
-            />
-          ))}
-        </>
-      ) : null}
-    </Screen>
+      {/* Retired section header */}
+      {null}
+    </>
   );
-}
 
-function QuestionCard({
-  index,
-  question,
-  onToggle,
-  onRemove,
-}: {
-  index?: number;
-  question: Question;
-  onToggle: () => void;
-  onRemove: () => void;
-}) {
   return (
-    <Card>
-      <Text style={[styles.prompt, !question.isActive && styles.promptRetired]}>
-        {index ? `${index}. ` : ''}
-        {question.prompt}
-      </Text>
+    <GestureHandlerRootView style={styles.container}>
+      {/* Gradient Header */}
+      <LinearGradient
+        colors={['#414fb8', '#5b6abf', '#7b85d4']}
+        style={[styles.header, { paddingTop: insets.top + 16 }]}
+      >
+        <View style={styles.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerTitle}>Questions</Text>
+            <Text style={styles.headerSubtitle}>
+              {active.length} of {MAX_ACTIVE_QUESTIONS} active questions. These are what{'\n'}every student answers each day.
+            </Text>
+          </View>
+          <View style={styles.settingsButton}>
+            <MaterialIcons name="settings" size={24} color="#ffffff" />
+          </View>
+        </View>
+      </LinearGradient>
 
-      {question.helpText ? <Text style={styles.help}>{question.helpText}</Text> : null}
+      {/* Draggable list */}
+      <DraggableFlatList
+        data={active}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        onDragEnd={onDragEnd}
+        ListHeaderComponent={ListHeader}
+        contentContainerStyle={styles.listContent}
+        containerStyle={{ flex: 1 }}
+        showsVerticalScrollIndicator={false}
+      />
 
-      <View style={styles.badgeRow}>
-        <Badge text={QUESTION_TYPE_LABELS[question.type]} />
-        <Badge text={question.required ? 'Required' : 'Optional'} />
-        {question.options && question.options.length > 0 ? (
-          <Badge text={`${question.options.length} options`} />
-        ) : null}
-      </View>
-
-      {question.options && question.options.length > 0 ? (
-        <Text style={styles.options}>{question.options.join(' \u00b7 ')}</Text>
-      ) : null}
-
-      <View style={styles.actionRow}>
-        <Text style={styles.actionLink} onPress={onToggle} accessibilityRole="button">
-          {question.isActive ? 'Retire' : 'Reactivate'}
-        </Text>
-        <Text style={styles.actionDanger} onPress={onRemove} accessibilityRole="button">
-          Remove
-        </Text>
-      </View>
-    </Card>
-  );
-}
-
-function Badge({ text }: { text: string }) {
-  return (
-    <View style={styles.badge}>
-      <Text style={styles.badgeText}>{text}</Text>
-    </View>
+      {/* Context menu modal */}
+      <Modal
+        visible={menuOpenId !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuOpenId(null)}
+      >
+        <Pressable style={styles.menuOverlay} onPress={() => setMenuOpenId(null)}>
+          <View style={styles.menuCard}>
+            <Pressable
+              style={styles.menuItem}
+              onPress={() => {
+                const question = active.find((q) => q.id === menuOpenId);
+                if (question) onEdit(question);
+              }}
+            >
+              <MaterialIcons name="edit" size={20} color={colors.primary} />
+              <Text style={styles.menuItemText}>Edit</Text>
+            </Pressable>
+            <View style={styles.menuDivider} />
+            <Pressable
+              style={styles.menuItem}
+              onPress={() => {
+                const question = active.find((q) => q.id === menuOpenId);
+                setMenuOpenId(null);
+                if (question) onRemove(question);
+              }}
+            >
+              <MaterialIcons name="delete-outline" size={20} color={colors.danger} />
+              <Text style={[styles.menuItemText, { color: colors.danger }]}>Remove</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
-  muted: { fontSize: fontSize.small, color: colors.textMuted, lineHeight: 20 },
-  spacer: { height: spacing.md },
-  hint: {
-    marginTop: spacing.sm,
-    fontSize: fontSize.caption,
-    color: colors.textMuted,
-    textAlign: 'center',
+  container: { flex: 1, backgroundColor: colors.background },
+  header: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
-  formError: { fontSize: fontSize.small, color: colors.danger, fontWeight: '600' },
-  warnBox: {
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: '#fff' },
+  headerSubtitle: { fontSize: 13, color: '#ffffffcc', marginTop: 6, lineHeight: 18 },
+  settingsButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#ffffff20',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  listContent: { padding: 16, paddingBottom: 100 },
+  addCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    backgroundColor: colors.warningBg,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    marginBottom: spacing.md,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1.5,
+    borderColor: colors.primary + '30',
+    ...shadow.card,
   },
-  warnText: { flex: 1, fontSize: fontSize.small, color: colors.text, lineHeight: 19 },
-  sectionLabel: {
-    fontSize: fontSize.caption,
-    fontWeight: '700',
-    color: colors.textMuted,
-    textTransform: 'uppercase',
-    marginTop: spacing.md,
-    marginBottom: spacing.sm,
+  addIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#eceef8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
   },
-  prompt: { fontSize: fontSize.body, fontWeight: '700', color: colors.text, lineHeight: 22 },
-  promptRetired: { color: colors.textMuted },
-  help: { fontSize: fontSize.small, color: colors.textMuted, marginTop: 4, lineHeight: 19 },
-  badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
-  badge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surfaceAlt,
-  },
-  badgeText: { fontSize: fontSize.caption, color: colors.textMuted, fontWeight: '600' },
-  options: { fontSize: fontSize.caption, color: colors.textMuted, marginTop: spacing.sm },
-  actionRow: {
+  addText: { fontSize: 15, fontWeight: '600', color: colors.primary },
+  formCard: { marginBottom: 12 },
+  questionCard: {
     flexDirection: 'row',
-    gap: spacing.xl,
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    alignItems: 'flex-start',
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    ...shadow.card,
   },
-  actionLink: { fontSize: fontSize.small, color: colors.primary, fontWeight: '700' },
-  actionDanger: { fontSize: fontSize.small, color: colors.danger, fontWeight: '700' },
-  optionsSection: { marginBottom: spacing.lg },
-  optionsLabel: { fontSize: fontSize.small, fontWeight: '600', color: colors.text, marginBottom: spacing.sm },
-  required: { color: colors.danger },
-  optionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  optionInputWrap: { flex: 1 },
-  optionRemove: {
-    fontSize: 18,
-    color: colors.danger,
-    fontWeight: '700',
-    paddingHorizontal: spacing.sm,
-    paddingBottom: spacing.lg,
+  questionCardDragging: {
+    opacity: 0.92,
+    elevation: 8,
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
   },
-  addOptionRow: { marginTop: spacing.xs },
-  addOptionLink: { fontSize: fontSize.small, color: colors.primary, fontWeight: '700' },
-  fieldError: { marginTop: spacing.xs, fontSize: fontSize.small, color: colors.danger },
+  dragHandle: {
+    paddingRight: 8,
+    paddingTop: 4,
+    justifyContent: 'center',
+  },
+  numberCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#eceef8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  numberText: { fontSize: 14, fontWeight: '800', color: colors.primary },
+  questionContent: { flex: 1 },
+  questionPrompt: { fontSize: 14, fontWeight: '700', color: colors.text, lineHeight: 20 },
+  questionHelp: { fontSize: 12, color: colors.textMuted, marginTop: 3, lineHeight: 17 },
+  badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  typeBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: '#eceef8',
+  },
+  typeBadgeText: { fontSize: 11, fontWeight: '700', color: colors.primary },
+  requiredBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  requiredBadgeActive: { backgroundColor: colors.successBg },
+  optionalBadge: { backgroundColor: colors.warningBg },
+  requiredBadgeText: { fontSize: 11, fontWeight: '700' },
+  moreButton: {
+    paddingLeft: 4,
+    paddingTop: 4,
+  },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    paddingVertical: 8,
+    width: 200,
+    ...shadow.card,
+    elevation: 10,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+  },
+  menuItemText: { fontSize: 15, fontWeight: '600', color: colors.text },
+  menuDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+    marginHorizontal: 16,
+  },
+  optionsSection: { marginBottom: 12 },
+  optionsLabel: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 8 },
+  requiredStar: { color: colors.danger },
+  optionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  removeOptionBtn: { padding: 6 },
+  addOptionBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  addOptionText: { fontSize: 13, color: colors.primary, fontWeight: '700' },
+  fieldError: { marginTop: 4, fontSize: 12, color: colors.danger },
+  formError: { fontSize: 13, color: colors.danger, fontWeight: '600', marginTop: 8 },
 });

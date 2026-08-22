@@ -10,14 +10,14 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import type { DocumentMeta, Question } from '@ims/shared-types';
 import { answerValidatorFor } from '@ims/shared-validation';
-import { Screen } from '@/components/shared/Screen';
-import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { ChipGroup } from '@/components/ui/Chips';
@@ -26,9 +26,10 @@ import { FormSkeleton } from '@/components/ui/SkeletonLoader';
 import { ApiError } from '@/lib/api/client';
 import { useSubmitAnswers, useTodayForm } from '@/lib/api/hooks';
 import { uploadFile, validateFile, type PickedFile } from '@/lib/api/upload';
-import { colors, fontSize, radius, spacing } from '@/constants/theme';
+import { colors, fontSize, radius, shadow, spacing } from '@/constants/theme';
 
 export default function AnswerScreen() {
+  const insets = useSafeAreaInsets();
   // The server owns what "today" is; asking for it without a date gets that answer.
   const todayKey = new Date().toISOString().slice(0, 10);
   const { data: form, isLoading, error, refetch } = useTodayForm(todayKey);
@@ -170,35 +171,56 @@ export default function AnswerScreen() {
 
   if (error && !form) {
     return (
-      <Screen>
-        <Card title="Could not load the questions">
-          <Text style={styles.muted}>
-            {error instanceof Error ? error.message : 'Something went wrong.'}
-          </Text>
-          <View style={styles.spacer} />
+      <View style={styles.container}>
+        <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
+          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+            <MaterialIcons name="arrow-back" size={22} color="#fff" />
+          </Pressable>
+          <Text style={styles.headerTitle}>Today's Questions</Text>
+        </LinearGradient>
+        <View style={styles.errorCard}>
+          <MaterialIcons name="error-outline" size={36} color={colors.danger} />
+          <Text style={styles.errorText}>{error instanceof Error ? error.message : 'Something went wrong.'}</Text>
           <Button label="Try again" onPress={() => void refetch()} />
-        </Card>
-      </Screen>
+        </View>
+      </View>
     );
   }
 
   if (!form) return null;
 
   return (
-    <Screen>
+    <View style={styles.container}>
+      <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
+        <View style={styles.headerRow}>
+          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+            <MaterialIcons name="arrow-back" size={22} color="#fff" />
+          </Pressable>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerTitle}>Today's Questions</Text>
+            <Text style={styles.headerSubtitle}>{questions.length} question{questions.length === 1 ? '' : 's'} to answer</Text>
+          </View>
+        </View>
+      </LinearGradient>
+
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       {/* ---- Existing decision, if any ---- */}
       {form.submission ? (
-        <Card title="Your submission">
-          <View style={styles.statusRow}>
+        <View style={styles.card}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <Text style={styles.sectionTitle}>Your submission</Text>
             <StatusPill status={form.submission.status} />
           </View>
           {form.submission.reviewNote ? (
             <View style={styles.noteBox}>
-              <Text style={styles.noteLabel}>Faculty note</Text>
-              <Text style={styles.noteText}>{form.submission.reviewNote}</Text>
+              <MaterialIcons name="info" size={14} color={colors.danger} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.noteLabel}>Faculty note</Text>
+                <Text style={styles.noteText}>{form.submission.reviewNote}</Text>
+              </View>
             </View>
           ) : null}
-        </Card>
+        </View>
       ) : null}
 
       {/* ---- Locked explanation ---- */}
@@ -231,7 +253,7 @@ export default function AnswerScreen() {
 
       {/* ---- Submit ---- */}
       {form.canSubmit ? (
-        <Card>
+        <View style={styles.card}>
           {formError ? (
             <View accessibilityLiveRegion="polite">
               <Text style={styles.formError}>{formError}</Text>
@@ -249,9 +271,10 @@ export default function AnswerScreen() {
           {hasBlockingErrors ? (
             <Text style={styles.hint}>Answer every required question to submit.</Text>
           ) : null}
-        </Card>
+        </View>
       ) : null}
-    </Screen>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -289,7 +312,7 @@ function QuestionField({
   if (question.type === 'file_upload') {
     const fileInfo = uploadedFiles[question.id];
     return (
-      <Card>
+      <View style={styles.card}>
         <Text style={styles.questionPrompt}>
           {index}. {question.prompt}
           {question.required ? <Text style={styles.required}> *</Text> : null}
@@ -354,13 +377,13 @@ function QuestionField({
             <Text style={styles.fieldError}>{error}</Text>
           </View>
         ) : null}
-      </Card>
+      </View>
     );
   }
 
   if (question.type === 'choice') {
     return (
-      <Card>
+      <View style={styles.card}>
         <Text style={styles.questionPrompt}>
           {index}. {question.prompt}
           {question.required ? <Text style={styles.required}> *</Text> : null}
@@ -374,12 +397,12 @@ function QuestionField({
           disabled={!editable}
           error={error}
         />
-      </Card>
+      </View>
     );
   }
 
   return (
-    <Card>
+    <View style={styles.card}>
       <Text style={styles.questionPrompt}>
         {index}. {question.prompt}
         {question.required ? <Text style={styles.required}> *</Text> : null}
@@ -411,7 +434,7 @@ function QuestionField({
         accessory={counter}
         accessibilityLabel={question.prompt}
       />
-    </Card>
+    </View>
   );
 }
 
@@ -422,6 +445,17 @@ function formatSize(bytes: number): string {
 }
 
 const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background },
+  header: { paddingHorizontal: 20, paddingBottom: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerTitle: { fontSize: 20, fontWeight: '800', color: '#fff' },
+  headerSubtitle: { fontSize: 12, color: '#ffffffcc', marginTop: 2 },
+  backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff20', alignItems: 'center', justifyContent: 'center' },
+  content: { padding: 16, paddingBottom: 100, gap: 12 },
+  card: { backgroundColor: '#fff', borderRadius: 14, padding: 16, ...shadow.card },
+  errorCard: { margin: 20, padding: 24, backgroundColor: '#fff', borderRadius: 14, alignItems: 'center', gap: 12 },
+  errorText: { fontSize: 14, color: colors.textMuted, textAlign: 'center' },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
   muted: { fontSize: fontSize.body, color: colors.textMuted },
   spacer: { height: spacing.md },
   statusRow: { flexDirection: 'row', marginBottom: spacing.sm },
@@ -449,6 +483,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   noteBox: {
+    flexDirection: 'row',
+    gap: 8,
     backgroundColor: colors.dangerBg,
     borderRadius: radius.md,
     padding: spacing.md,

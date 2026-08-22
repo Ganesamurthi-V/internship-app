@@ -213,6 +213,18 @@ export function useDeleteQuestion() {
   });
 }
 
+export function useReorderQuestions() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (order: { id: string; sortOrder: number }[]) =>
+      api.patch<Question[]>('/questions/reorder', { order }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.questions.all });
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Students
 // ---------------------------------------------------------------------------
