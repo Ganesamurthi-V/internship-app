@@ -44,6 +44,10 @@ export function useDashboard(options?: Partial<UseQueryOptions<DashboardResponse
   return useQuery({
     queryKey: queryKeys.dashboard,
     queryFn: () => api.get<DashboardResponse>('/dashboard'),
+    // Dashboard must always show fresh data when the user navigates to it.
+    // Without this, switching tabs after a review shows stale counts.
+    staleTime: 0,
+    refetchOnMount: 'always',
     ...options,
   });
 }
