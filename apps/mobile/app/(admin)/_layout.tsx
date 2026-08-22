@@ -1,21 +1,24 @@
 /**
- * Faculty and admin tabs — redesigned bottom tab bar with active indicator line.
+ * Admin tabs — separate navigation for administrators.
+ *
+ * Admin can oversee all faculty activities and all students across departments.
+ * Tabs: Dashboard, Faculty, Students, Questions
  */
 
 import { Redirect, Tabs } from 'expo-router';
 import { Platform, StyleSheet, View } from 'react-native';
 import type { ColorValue } from 'react-native';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { colors, fontSize } from '@/constants/theme';
+import { colors } from '@/constants/theme';
 import { useAuthStore } from '@/stores/authStore';
 
-export default function FacultyLayout() {
+export default function AdminLayout() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const role = useAuthStore((state) => state.user?.role);
 
   if (!isAuthenticated) return <Redirect href="/(auth)/login" />;
   if (role === 'student') return <Redirect href="/(student)/dashboard" />;
-  if (role === 'admin') return <Redirect href="/(admin)/dashboard" />;
+  if (role === 'faculty') return <Redirect href="/(faculty)/dashboard" />;
 
   return (
     <Tabs
@@ -46,18 +49,18 @@ export default function FacultyLayout() {
       <Tabs.Screen
         name="dashboard"
         options={{
-          title: 'Overview',
+          title: 'Dashboard',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon name="grid-view" color={color} focused={focused} />
+            <TabIcon name="dashboard" color={color} focused={focused} />
           ),
         }}
       />
       <Tabs.Screen
-        name="review"
+        name="faculty"
         options={{
-          title: 'Review',
+          title: 'Faculty',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon name="fact-check" color={color} focused={focused} />
+            <TabIcon name="admin-panel-settings" color={color} focused={focused} />
           ),
         }}
       />
@@ -78,10 +81,6 @@ export default function FacultyLayout() {
             <TabIcon name="help-outline" color={color} focused={focused} />
           ),
         }}
-      />
-      <Tabs.Screen
-        name="manage-faculty"
-        options={{ href: null }}
       />
     </Tabs>
   );

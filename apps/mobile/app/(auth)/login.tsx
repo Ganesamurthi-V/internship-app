@@ -83,7 +83,13 @@ export default function LoginScreen() {
     setSubmitting(true);
     try {
       await login(email, password);
-      router.replace('/(faculty)/dashboard');
+      // Check role after login to route correctly
+      const role = useAuthStore.getState().user?.role;
+      if (role === 'admin') {
+        router.replace('/(admin)/dashboard');
+      } else {
+        router.replace('/(faculty)/dashboard');
+      }
     } catch (caught) {
       const msg = caught instanceof Error ? caught.message : 'Could not sign in.';
       if (msg.includes('Invalid login credentials')) {

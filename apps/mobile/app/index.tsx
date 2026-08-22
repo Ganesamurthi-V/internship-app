@@ -24,13 +24,13 @@ export default function Index() {
   }
 
   switch (role) {
-    case 'faculty':
     case 'admin':
+      return <Redirect href="/(admin)/dashboard" />;
+    case 'faculty':
       return <Redirect href="/(faculty)/dashboard" />;
     case 'student':
       return <Redirect href="/(student)/dashboard" />;
     default:
-      // Authenticated but no role resolved yet — treat as student, the common case.
       return <Redirect href="/(student)/dashboard" />;
   }
 }
