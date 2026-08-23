@@ -12,7 +12,7 @@
  */
 
 import { useRef, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -121,6 +121,8 @@ export default function StudentRegisterScreen() {
   const [showDeptPicker, setShowDeptPicker] = useState(false);
   const [showStartDate, setShowStartDate] = useState(false);
   const [showEndDate, setShowEndDate] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
 
   // Store in-flight upload promises so submit can await them
   const offerPromiseRef = useRef<Promise<PreRegistrationUpload> | null>(null);
@@ -216,6 +218,8 @@ export default function StudentRegisterScreen() {
     else setStep(step - 1);
   };
 
+
+
   // ─── Submit ───
   const onSubmit = async (): Promise<void> => {
     if (!validateStep(3)) return;
@@ -238,9 +242,22 @@ export default function StudentRegisterScreen() {
     setSubmitting(true);
 
     try {
-      // Await the background promises to get the confirmed storage keys
-      const offerUploadResult  = offerPromiseRef.current  ? await offerPromiseRef.current  : null;
-      const joinUploadResult   = joiningPromiseRef.current ? await joiningPromiseRef.current : null;
+      // Get uploaded document metadata from state or in-flight promises
+      let offerUploadResult = offerUpload?.upload ?? null;
+      if (!offerUploadResult && offerPromiseRef.current) {
+        offerUploadResult = await offerPromiseRef.current.catch(() => null);
+      }
+
+      let joinUploadResult = joiningUpload?.upload ?? null;
+      if (!joinUploadResult && joiningPromiseRef.current) {
+        joinUploadResult = await joiningPromiseRef.current.catch(() => null);
+      }
+
+      if (!offerUploadResult?.storageKey || !joinUploadResult?.storageKey) {
+        setError('Document upload incomplete. Please re-select PDF files.');
+        setSubmitting(false);
+        return;
+      }
 
       const domainValue = form.internshipDomain === 'other' ? form.otherDomain.trim() : form.internshipDomain;
 
@@ -248,7 +265,7 @@ export default function StudentRegisterScreen() {
         name: form.name.trim(),
         registerNumber: form.registerNumber.trim().toUpperCase(),
         programme: form.department,
-        year: Number(form.year),
+        year: form.year ? Number(form.year) : undefined,
         section: form.section.trim().toUpperCase(),
         studentEmail: form.email.trim().toLowerCase(),
         mobile: form.mobile.trim(),
@@ -258,33 +275,39 @@ export default function StudentRegisterScreen() {
         internshipMode: form.internshipMode,
         startDate: form.startDate,
         endDate: form.endDate,
-        durationDays: Number(form.totalDuration),
-        workingHoursPerDay: Number(form.workingHoursPerDay),
+        durationDays: form.totalDuration ? Number(form.totalDuration) : undefined,
+        workingHoursPerDay: form.workingHoursPerDay ? Number(form.workingHoursPerDay) : undefined,
         mentorName: form.mentorName.trim(),
         mentorDesignation: form.mentorDesignation.trim(),
         mentorContact: form.mentorContact.trim(),
         facultyCoordinator: form.facultyCoordinator.trim(),
         // Pass storage keys + metadata so student-register can create Document rows
-        offerLetterStorageKey: offerUploadResult?.storageKey,
-        offerLetterFilename: offerUploadResult?.filename,
-        offerLetterMimeType: offerUploadResult?.mimeType,
-        offerLetterSizeBytes: offerUploadResult?.sizeBytes,
-        joiningLetterStorageKey: joinUploadResult?.storageKey,
-        joiningLetterFilename: joinUploadResult?.filename,
-        joiningLetterMimeType: joinUploadResult?.mimeType,
-        joiningLetterSizeBytes: joinUploadResult?.sizeBytes,
+        offerLetterStorageKey: offerUploadResult.storageKey,
+        offerLetterFilename: offerUploadResult.filename,
+        offerLetterMimeType: offerUploadResult.mimeType,
+        offerLetterSizeBytes: offerUploadResult.sizeBytes,
+        joiningLetterStorageKey: joinUploadResult.storageKey,
+        joiningLetterFilename: joinUploadResult.filename,
+        joiningLetterMimeType: joinUploadResult.mimeType,
+        joiningLetterSizeBytes: joinUploadResult.sizeBytes,
       });
 
-      // Registration successful — account is pending approval, don't auto-login
-      Alert.alert(
-        'Account Created!',
-        res.message,
-        [{ text: 'OK', onPress: () => router.replace('/(auth)/login') }],
-      );
+      // Registration successful — account is pending approval, show custom modal
+      setSuccessMessage(res.message);
+      setShowSuccessModal(true);
     } catch (caught) {
       if (caught instanceof ApiError) {
-        caught.fields ? setFieldErrors(caught.fields) : setError(caught.message);
-      } else { setError('Something went wrong. Try again.'); }
+        const errorMsg = (caught.fields && Object.values(caught.fields)[0]) || caught.message;
+        if (caught.fields) {
+          setFieldErrors(caught.fields);
+        }
+        setError(errorMsg);
+        Alert.alert('Registration Failed', errorMsg);
+      } else {
+        const fallbackMsg = 'Something went wrong. Check your connection and try again.';
+        setError(fallbackMsg);
+        Alert.alert('Error', fallbackMsg);
+      }
     } finally { setSubmitting(false); }
   };
 
@@ -554,6 +577,16 @@ export default function StudentRegisterScreen() {
           <Button label="Create Account" onPress={() => void onSubmit()} loading={submitting} />
         )}
       </View>
+
+      {/* Account Created Modal */}
+      <AccountCreatedModal
+        visible={showSuccessModal}
+        message={successMessage}
+        onClose={() => {
+          setShowSuccessModal(false);
+          router.replace('/(auth)/login');
+        }}
+      />
     </View>
   );
 }
@@ -742,4 +775,131 @@ const styles = StyleSheet.create({
   fileName: { fontSize: fontSize.small, color: colors.text, fontWeight: '600' },
   fileStatusText: { fontSize: fontSize.caption, color: colors.textMuted, marginTop: 2 },
   fileError: { marginTop: spacing.xs, fontSize: fontSize.small, color: colors.danger },
+});
+
+// ---------------------------------------------------------------------------
+// Account Created Success Modal Component
+// ---------------------------------------------------------------------------
+
+function AccountCreatedModal({
+  visible,
+  message,
+  onClose,
+}: {
+  visible: boolean;
+  message: string;
+  onClose: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={modalStyles.overlay}>
+        <View style={modalStyles.card}>
+          {/* Header illustration with sparkles */}
+          <View style={modalStyles.illustrationContainer}>
+            {/* Sparkles / diamonds around the checkmark */}
+            <View style={[modalStyles.sparkle, { top: 12, left: 24, backgroundColor: '#FACC15', width: 9, height: 9 }]} />
+            <View style={[modalStyles.sparkle, { top: 0, left: 62, backgroundColor: '#93C5FD', width: 11, height: 11 }]} />
+            <View style={[modalStyles.sparkle, { top: 4, right: 62, backgroundColor: '#FB7185', width: 9, height: 9 }]} />
+            <View style={[modalStyles.sparkle, { top: 14, right: 24, backgroundColor: '#34D399', width: 10, height: 10 }]} />
+            <View style={[modalStyles.sparkle, { top: 46, left: 44, backgroundColor: '#F472B6', width: 8, height: 8 }]} />
+            <View style={[modalStyles.sparkle, { top: 46, right: 44, backgroundColor: '#FDE047', width: 9, height: 9 }]} />
+            <View style={[modalStyles.sparkle, { top: 60, left: 20, backgroundColor: '#2DD4BF', width: 8, height: 8 }]} />
+            <View style={[modalStyles.sparkle, { top: 60, right: 20, backgroundColor: '#FB7185', width: 7, height: 7 }]} />
+
+            {/* Central green checkmark badge */}
+            <View style={modalStyles.circle}>
+              <MaterialIcons name="check" size={42} color="#059669" />
+            </View>
+          </View>
+
+          {/* Title */}
+          <Text style={modalStyles.title}>Account Created!</Text>
+
+          {/* Description */}
+          <Text style={modalStyles.message}>
+            {message ||
+              'Account created successfully! Your profile is pending faculty approval. You will be able to log in once your department faculty approves your account.'}
+          </Text>
+
+          {/* Got it Button */}
+          <Pressable style={modalStyles.button} onPress={onClose}>
+            <Text style={modalStyles.buttonText}>Got it</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const modalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  card: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 32,
+    paddingBottom: 24,
+    alignItems: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  illustrationContainer: {
+    width: 170,
+    height: 84,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    marginBottom: 16,
+  },
+  circle: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#DCFCE7',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sparkle: {
+    position: 'absolute',
+    borderRadius: 2,
+    transform: [{ rotate: '45deg' }],
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0F172A',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  message: {
+    fontSize: 14.5,
+    lineHeight: 22,
+    color: '#475569',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  button: {
+    width: '100%',
+    backgroundColor: colors.primaryDark,
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
 });

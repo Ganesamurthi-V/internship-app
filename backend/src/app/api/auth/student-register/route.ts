@@ -96,14 +96,24 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
       let resolvedJoinDocId  = input.joiningLetterDocId ?? null;
 
       if (input.offerLetterStorageKey && !resolvedOfferDocId) {
-        const stat = await statObject(input.offerLetterStorageKey);
+        let size = input.offerLetterSizeBytes ?? 0;
+        let mime = input.offerLetterMimeType ?? 'application/pdf';
+        try {
+          const stat = await statObject(input.offerLetterStorageKey);
+          if (stat) {
+            size = stat.sizeBytes || size;
+            mime = stat.mimeType || mime;
+          }
+        } catch {
+          // Fall back to client metadata
+        }
         const doc = await tx.document.create({
           data: {
             ownerUserId: user.id,
             storageKey: input.offerLetterStorageKey,
-            originalFilename: input.offerLetterFilename ?? 'offer-letter',
-            mimeType: input.offerLetterMimeType ?? 'application/pdf',
-            sizeBytes: stat?.sizeBytes ?? input.offerLetterSizeBytes ?? 0,
+            originalFilename: input.offerLetterFilename ?? 'offer-letter.pdf',
+            mimeType: mime,
+            sizeBytes: size,
           },
           select: { id: true },
         });
@@ -111,14 +121,24 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
       }
 
       if (input.joiningLetterStorageKey && !resolvedJoinDocId) {
-        const stat = await statObject(input.joiningLetterStorageKey);
+        let size = input.joiningLetterSizeBytes ?? 0;
+        let mime = input.joiningLetterMimeType ?? 'application/pdf';
+        try {
+          const stat = await statObject(input.joiningLetterStorageKey);
+          if (stat) {
+            size = stat.sizeBytes || size;
+            mime = stat.mimeType || mime;
+          }
+        } catch {
+          // Fall back to client metadata
+        }
         const doc = await tx.document.create({
           data: {
             ownerUserId: user.id,
             storageKey: input.joiningLetterStorageKey,
-            originalFilename: input.joiningLetterFilename ?? 'joining-letter',
-            mimeType: input.joiningLetterMimeType ?? 'application/pdf',
-            sizeBytes: stat?.sizeBytes ?? input.joiningLetterSizeBytes ?? 0,
+            originalFilename: input.joiningLetterFilename ?? 'joining-letter.pdf',
+            mimeType: mime,
+            sizeBytes: size,
           },
           select: { id: true },
         });
