@@ -3,7 +3,7 @@
  */
 
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,7 +14,7 @@ import { colors, fontSize, shadow, spacing } from '@/constants/theme';
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
-  const { data: student, isLoading } = useMyProfile();
+  const { data: student, isLoading, isRefetching, refetch } = useMyProfile();
   const logout = useAuthStore((state) => state.logout);
   const user = useAuthStore((state) => state.user);
 
@@ -50,7 +50,9 @@ export default function ProfileScreen() {
         </View>
       </LinearGradient>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} tintColor={colors.primary} />}
+      >
         {/* Academic Info Card */}
         <View style={styles.card}>
           <View style={styles.cardTitleRow}>

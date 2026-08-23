@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -32,7 +32,7 @@ export default function AnswerScreen() {
   const insets = useSafeAreaInsets();
   // The server owns what "today" is; asking for it without a date gets that answer.
   const todayKey = new Date().toISOString().slice(0, 10);
-  const { data: form, isLoading, error, refetch } = useTodayForm(todayKey);
+  const { data: form, isLoading, isRefetching, error, refetch } = useTodayForm(todayKey);
 
   const submit = useSubmitAnswers();
 
@@ -203,7 +203,9 @@ export default function AnswerScreen() {
         </View>
       </LinearGradient>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} tintColor={colors.primary} />}
+      >
       {/* ---- Existing decision, if any ---- */}
       {form.submission ? (
         <View style={styles.card}>

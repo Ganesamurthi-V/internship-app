@@ -2,7 +2,7 @@
  * Student home — redesigned with gradient header, icon cards, and modern layout.
  */
 
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -59,6 +59,7 @@ export default function StudentDashboardScreen() {
     <View style={styles.container}>
       <ScrollView
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} tintColor={colors.primary} />}
         contentContainerStyle={{ paddingBottom: 32 }}
       >
         {/* ---- Gradient Header ---- */}

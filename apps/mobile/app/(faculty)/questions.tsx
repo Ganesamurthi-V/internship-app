@@ -110,7 +110,7 @@ export default function QuestionsScreen() {
           options: options ?? null,
           minLength: null,
           maxLength: type === 'long_text' ? ANSWER_MAX_LENGTH : null,
-          departmentId: null,
+          departmentId: null, // Backend auto-assigns faculty's department
           referenceDocId: null,
         });
       }

@@ -24,14 +24,13 @@ void SplashScreen.preventAutoHideAsync();
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // A student submits once a day and a reviewer decides once per submission, so
-      // 5 minutes of staleness is generous. Navigating between tabs then serves from
-      // cache instead of firing a request on every mount.
-      staleTime: 5 * 60 * 1000, // 5 minutes
+      // Data refreshes automatically when a screen mounts or the user pulls to refresh.
+      staleTime: 0,
+      refetchOnMount: 'always',
 
-      // Keep unmounted query data in memory for 30 minutes so returning to a
-      // previously visited screen is instant without a loading spinner.
-      gcTime: 30 * 60 * 1000, // 30 minutes
+      // Keep unmounted query data in memory for 10 minutes so returning to a
+      // previously visited screen shows cached data while refetching.
+      gcTime: 10 * 60 * 1000, // 10 minutes
 
       // 4xx will not succeed on a retry; only retry transport failures.
       retry: (failureCount, error: unknown) => {

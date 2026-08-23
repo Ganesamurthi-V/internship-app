@@ -1,9 +1,8 @@
 /**
  * React Query hooks over the API client.
  *
- * Reads use generous `staleTime` values matched to how often the data actually
- * changes, so navigating between screens serves from cache instead of refetching.
- * Writes invalidate the specific keys they affect rather than clearing everything,
+ * Global staleTime is 0 — data always refetches when a screen mounts or the user
+ * pulls to refresh. Writes invalidate the specific keys they affect.
  * which is what keeps a submission from blanking the whole screen while it saves.
  */
 
@@ -44,10 +43,6 @@ export function useDashboard(options?: Partial<UseQueryOptions<DashboardResponse
   return useQuery({
     queryKey: queryKeys.dashboard,
     queryFn: () => api.get<DashboardResponse>('/dashboard'),
-    // Dashboard must always show fresh data when the user navigates to it.
-    // Without this, switching tabs after a review shows stale counts.
-    staleTime: 0,
-    refetchOnMount: 'always',
     ...options,
   });
 }
@@ -65,7 +60,6 @@ export function useTodayForm(date: string) {
   return useQuery({
     queryKey: queryKeys.submissions.today(date),
     queryFn: () => api.get<TodayForm>('/submissions/today', { date }),
-    staleTime: 60 * 1000,
   });
 }
 
@@ -109,7 +103,6 @@ export function useSubmissionList(filters: {
         to: filters.to,
         page: filters.page ?? 1,
       }),
-    staleTime: 60 * 1000,
   });
 }
 
@@ -118,7 +111,6 @@ export function useSubmission(submissionId: string | undefined) {
     queryKey: queryKeys.submissions.detail(submissionId ?? 'none'),
     enabled: Boolean(submissionId),
     queryFn: () => api.get<DailySubmissionDetail>(`/submissions/${submissionId}`),
-    staleTime: 2 * 60 * 1000,
   });
 }
 
@@ -171,8 +163,6 @@ export function useQuestions(activeOnly = true) {
   return useQuery({
     queryKey: queryKeys.questions.list(activeOnly),
     queryFn: () => api.get<Question[]>('/questions', { activeOnly }),
-    // Questions change rarely — a reviewer edits them occasionally, not hourly.
-    staleTime: 10 * 60 * 1000,
   });
 }
 
@@ -237,7 +227,6 @@ export function useMyProfile() {
   return useQuery({
     queryKey: queryKeys.students.me,
     queryFn: () => api.get<Student>('/students/me'),
-    staleTime: 10 * 60 * 1000,
   });
 }
 
@@ -270,7 +259,6 @@ export function useStudentList(filters: {
         submittedToday: filters.submittedToday,
         page: filters.page ?? 1,
       }),
-    staleTime: 2 * 60 * 1000,
   });
 }
 
@@ -283,7 +271,6 @@ export function useStudentDetail(studentId: string | undefined) {
       api.get<{ student: Student; summary: AttendanceSummary; history: DailySubmission[] }>(
         `/students/${studentId}`,
       ),
-    staleTime: 2 * 60 * 1000,
   });
 }
 
@@ -296,7 +283,6 @@ export function useUnattachedDocuments() {
   return useQuery({
     queryKey: queryKeys.documents.unattached,
     queryFn: () => api.get<DocumentMeta[]>('/documents'),
-    staleTime: 30 * 1000,
   });
 }
 
