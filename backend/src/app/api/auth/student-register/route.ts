@@ -20,6 +20,7 @@ import { prisma } from '@/lib/prisma';
 import { supabaseAdmin } from '@/lib/supabase';
 import { recordAudit } from '@/lib/audit';
 import { getRequestContext } from '@/lib/http';
+import { statObject } from '@/lib/storage';
 
 export const POST = withErrorHandling(async (request: NextRequest) => {
   const input = await parseJson(request, studentRegisterSchema);
@@ -88,6 +89,42 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
         select: { id: true },
       });
 
+      // If the client used the anonymous pre-registration upload flow, the storage
+      // keys come in as separate fields. Create the Document rows now that we have
+      // a real userId, then resolve the doc IDs for the student record.
+      let resolvedOfferDocId = input.offerLetterDocId ?? null;
+      let resolvedJoinDocId  = input.joiningLetterDocId ?? null;
+
+      if (input.offerLetterStorageKey && !resolvedOfferDocId) {
+        const stat = await statObject(input.offerLetterStorageKey);
+        const doc = await tx.document.create({
+          data: {
+            ownerUserId: user.id,
+            storageKey: input.offerLetterStorageKey,
+            originalFilename: input.offerLetterFilename ?? 'offer-letter',
+            mimeType: input.offerLetterMimeType ?? 'application/pdf',
+            sizeBytes: stat?.sizeBytes ?? input.offerLetterSizeBytes ?? 0,
+          },
+          select: { id: true },
+        });
+        resolvedOfferDocId = doc.id;
+      }
+
+      if (input.joiningLetterStorageKey && !resolvedJoinDocId) {
+        const stat = await statObject(input.joiningLetterStorageKey);
+        const doc = await tx.document.create({
+          data: {
+            ownerUserId: user.id,
+            storageKey: input.joiningLetterStorageKey,
+            originalFilename: input.joiningLetterFilename ?? 'joining-letter',
+            mimeType: input.joiningLetterMimeType ?? 'application/pdf',
+            sizeBytes: stat?.sizeBytes ?? input.joiningLetterSizeBytes ?? 0,
+          },
+          select: { id: true },
+        });
+        resolvedJoinDocId = doc.id;
+      }
+
       const student = await tx.student.create({
         data: {
           userId: user.id,
@@ -111,8 +148,8 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
           mentorDesignation: input.mentorDesignation ?? null,
           mentorContact: input.mentorContact ?? null,
           facultyCoordinator: input.facultyCoordinator ?? null,
-          offerLetterDocId: input.offerLetterDocId ?? null,
-          joiningLetterDocId: input.joiningLetterDocId ?? null,
+          offerLetterDocId: resolvedOfferDocId,
+          joiningLetterDocId: resolvedJoinDocId,
         },
         select: { id: true },
       });

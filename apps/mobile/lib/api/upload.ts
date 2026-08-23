@@ -85,3 +85,62 @@ export async function uploadFile(file: PickedFile): Promise<DocumentMeta> {
     documentId: reservation.documentId,
   });
 }
+
+/**
+ * The result of an anonymous pre-registration upload.
+ * Unlike a regular DocumentMeta, there is no DB row yet — the document is
+ * created inside student-register once the user account exists.
+ */
+export interface PreRegistrationUpload {
+  storageKey: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+/**
+ * Uploads one file without authentication — used during student self-registration
+ * before an account exists.
+ *
+ * Uses the dedicated `/api/auth/register-upload` endpoint which issues a signed
+ * Supabase URL without creating a Document row. The student-register route creates
+ * the Document row after the user account is created.
+ */
+export async function uploadFileAnonymous(file: PickedFile): Promise<PreRegistrationUpload> {
+  const validationMessage = validateFile(file);
+  if (validationMessage) {
+    throw new ApiError({
+      code: 'VALIDATION_ERROR',
+      message: validationMessage,
+      status: 422,
+    });
+  }
+
+  const reservation = await api.anonymous.post<{ uploadUrl: string; storageKey: string; expiresInSeconds: number }>(
+    '/auth/register-upload',
+    { filename: file.name, mimeType: file.mimeType, sizeBytes: file.size },
+  );
+
+  const body = await fetch(file.uri).then((r) => r.blob());
+
+  const putResponse = await fetch(reservation.uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.mimeType },
+    body,
+  });
+
+  if (!putResponse.ok) {
+    throw new ApiError({
+      code: 'SERVER_ERROR',
+      message: 'The file could not be uploaded. Check your connection and try again.',
+      status: putResponse.status,
+    });
+  }
+
+  return {
+    storageKey: reservation.storageKey,
+    filename: file.name,
+    mimeType: file.mimeType,
+    sizeBytes: file.size,
+  };
+}

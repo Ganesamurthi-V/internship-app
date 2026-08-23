@@ -71,9 +71,23 @@ export const studentRegisterSchema = z.object({
   mentorContact: z.string().trim().max(200).nullable().optional(),
   facultyCoordinator: z.string().trim().max(120).nullable().optional(),
 
-  // Document uploads (IDs of already-uploaded files)
+  // Document uploads — two mutually-exclusive ways to pass document references:
+  //   1. offerLetterDocId / joiningLetterDocId: UUIDs of already-confirmed Document
+  //      rows (used by authenticated upload flow).
+  //   2. offerLetterStorageKey / joiningLetterStorageKey: raw storage paths issued
+  //      by /api/auth/register-upload (used by the anonymous pre-registration flow).
+  //      student-register creates the Document rows after the user account exists.
   offerLetterDocId: uuidSchema.nullable().optional(),
   joiningLetterDocId: uuidSchema.nullable().optional(),
+  offerLetterStorageKey: z.string().trim().min(1).max(500).nullable().optional(),
+  joiningLetterStorageKey: z.string().trim().min(1).max(500).nullable().optional(),
+  // Metadata needed to create the Document rows from storage keys.
+  offerLetterFilename: z.string().trim().max(500).nullable().optional(),
+  joiningLetterFilename: z.string().trim().max(500).nullable().optional(),
+  offerLetterMimeType: z.string().trim().max(100).nullable().optional(),
+  joiningLetterMimeType: z.string().trim().max(100).nullable().optional(),
+  offerLetterSizeBytes: z.coerce.number().int().nullable().optional(),
+  joiningLetterSizeBytes: z.coerce.number().int().nullable().optional(),
 });
 export type StudentRegisterInput = z.output<typeof studentRegisterSchema>;
 

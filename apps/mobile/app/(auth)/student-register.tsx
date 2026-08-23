@@ -11,8 +11,8 @@
  * at the top shows progress and lets the student tap back to a completed step.
  */
 
-import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -28,8 +28,21 @@ import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { ChipGroup, type ChipOption } from '@/components/ui/Chips';
 import { api, ApiError } from '@/lib/api/client';
-import { uploadFile, type PickedFile } from '@/lib/api/upload';
+import { uploadFileAnonymous, type PickedFile, type PreRegistrationUpload } from '@/lib/api/upload';
 import { colors, fontSize, radius, spacing } from '@/constants/theme';
+
+// ---------------------------------------------------------------------------
+// Upload state types
+// ---------------------------------------------------------------------------
+
+type UploadStatus = 'idle' | 'uploading' | 'done' | 'error';
+
+interface FileUploadState {
+  file: PickedFile;
+  upload?: PreRegistrationUpload;  // set once the upload completes
+  status: UploadStatus;
+  error?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -100,8 +113,8 @@ const modeOptions: ChipOption<InternshipMode>[] = INTERNSHIP_MODES.map((m) => ({
 export default function StudentRegisterScreen() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormData>(INITIAL);
-  const [offerLetter, setOfferLetter] = useState<PickedFile | null>(null);
-  const [joiningLetter, setJoiningLetter] = useState<PickedFile | null>(null);
+  const [offerUpload, setOfferUpload] = useState<FileUploadState | null>(null);
+  const [joiningUpload, setJoiningUpload] = useState<FileUploadState | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -109,17 +122,47 @@ export default function StudentRegisterScreen() {
   const [showStartDate, setShowStartDate] = useState(false);
   const [showEndDate, setShowEndDate] = useState(false);
 
+  // Store in-flight upload promises so submit can await them
+  const offerPromiseRef = useRef<Promise<PreRegistrationUpload> | null>(null);
+  const joiningPromiseRef = useRef<Promise<PreRegistrationUpload> | null>(null);
+
   const set = <K extends keyof FormData>(key: K, value: FormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
     setFieldErrors((prev) => { const n = { ...prev }; delete n[key]; return n; });
     setError(null);
   };
 
-  const pickDoc = async (setter: (f: PickedFile | null) => void) => {
+  /** Pick a PDF and immediately start uploading it in the background. */
+  const pickDoc = async (
+    setUploadState: (s: FileUploadState | null) => void,
+    promiseRef: React.MutableRefObject<Promise<PreRegistrationUpload> | null>,
+    fieldKey: string,
+  ) => {
     const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
     if (result.canceled || !result.assets?.length) return;
     const a = result.assets[0]!;
-    setter({ uri: a.uri, name: a.name, mimeType: a.mimeType ?? 'application/pdf', size: a.size ?? 0 });
+    const picked: PickedFile = { uri: a.uri, name: a.name, mimeType: a.mimeType ?? 'application/pdf', size: a.size ?? 0 };
+
+    // Clear any previous error for this field
+    setFieldErrors((prev) => { const n = { ...prev }; delete n[fieldKey]; return n; });
+    setError(null);
+
+    // Show uploading state immediately
+    setUploadState({ file: picked, status: 'uploading' });
+
+    // Start background upload (no auth needed — uses the anonymous register-upload endpoint)
+    const promise = uploadFileAnonymous(picked)
+      .then((upload) => {
+        setUploadState({ file: picked, upload, status: 'done' });
+        return upload;
+      })
+      .catch((err) => {
+        const msg = err instanceof ApiError ? err.message : 'Upload failed. Try again.';
+        setUploadState({ file: picked, status: 'error', error: msg });
+        throw err;
+      });
+
+    promiseRef.current = promise;
   };
 
   const fmtDate = (d: Date): string => d.toISOString().slice(0, 10);
@@ -152,8 +195,8 @@ export default function StudentRegisterScreen() {
       if (!form.mentorContact.trim()) errs.mentorContact = 'Required';
       if (!form.facultyCoordinator.trim()) errs.facultyCoordinator = 'Required';
     } else if (s === 3) {
-      if (!offerLetter) errs.offerLetter = 'Upload offer letter';
-      if (!joiningLetter) errs.joiningLetter = 'Upload joining letter';
+      if (!offerUpload) errs.offerLetter = 'Upload offer letter';
+      if (!joiningUpload) errs.joiningLetter = 'Upload joining letter';
     }
 
     if (Object.keys(errs).length > 0) {
@@ -176,14 +219,28 @@ export default function StudentRegisterScreen() {
   // ─── Submit ───
   const onSubmit = async (): Promise<void> => {
     if (!validateStep(3)) return;
+
+    // Make sure both uploads have finished (they're likely already done)
+    const stillUploading =
+      offerUpload?.status === 'uploading' || joiningUpload?.status === 'uploading';
+    if (stillUploading) {
+      setError('Please wait — documents are still uploading…');
+      return;
+    }
+    const hasUploadError =
+      offerUpload?.status === 'error' || joiningUpload?.status === 'error';
+    if (hasUploadError) {
+      setError('One or more documents failed to upload. Please re-select and try again.');
+      return;
+    }
+
     setError(null);
     setSubmitting(true);
 
     try {
-      let offerDocId: string | undefined;
-      let joinDocId: string | undefined;
-      if (offerLetter) offerDocId = (await uploadFile(offerLetter)).id;
-      if (joiningLetter) joinDocId = (await uploadFile(joiningLetter)).id;
+      // Await the background promises to get the confirmed storage keys
+      const offerUploadResult  = offerPromiseRef.current  ? await offerPromiseRef.current  : null;
+      const joinUploadResult   = joiningPromiseRef.current ? await joiningPromiseRef.current : null;
 
       const domainValue = form.internshipDomain === 'other' ? form.otherDomain.trim() : form.internshipDomain;
 
@@ -207,8 +264,15 @@ export default function StudentRegisterScreen() {
         mentorDesignation: form.mentorDesignation.trim(),
         mentorContact: form.mentorContact.trim(),
         facultyCoordinator: form.facultyCoordinator.trim(),
-        offerLetterDocId: offerDocId,
-        joiningLetterDocId: joinDocId,
+        // Pass storage keys + metadata so student-register can create Document rows
+        offerLetterStorageKey: offerUploadResult?.storageKey,
+        offerLetterFilename: offerUploadResult?.filename,
+        offerLetterMimeType: offerUploadResult?.mimeType,
+        offerLetterSizeBytes: offerUploadResult?.sizeBytes,
+        joiningLetterStorageKey: joinUploadResult?.storageKey,
+        joiningLetterFilename: joinUploadResult?.filename,
+        joiningLetterMimeType: joinUploadResult?.mimeType,
+        joiningLetterSizeBytes: joinUploadResult?.sizeBytes,
       });
 
       // Registration successful — account is pending approval, don't auto-login
@@ -449,13 +513,21 @@ export default function StudentRegisterScreen() {
             <Text style={styles.stepTitle}>Documents</Text>
             <Text style={styles.stepSubtitle}>Upload PDF files for verification</Text>
 
-            <FilePicker label="Internship Offer Letter (PDF) *" file={offerLetter}
-              onPick={() => pickDoc(setOfferLetter)} onClear={() => setOfferLetter(null)}
-              error={fieldErrors.offerLetter} />
+            <FilePicker
+              label="Internship Offer Letter (PDF) *"
+              uploadState={offerUpload}
+              onPick={() => pickDoc(setOfferUpload, offerPromiseRef, 'offerLetter')}
+              onClear={() => { setOfferUpload(null); offerPromiseRef.current = null; }}
+              error={fieldErrors.offerLetter}
+            />
 
-            <FilePicker label="Joining Letter / Proof (PDF) *" file={joiningLetter}
-              onPick={() => pickDoc(setJoiningLetter)} onClear={() => setJoiningLetter(null)}
-              error={fieldErrors.joiningLetter} />
+            <FilePicker
+              label="Joining Letter / Proof (PDF) *"
+              uploadState={joiningUpload}
+              onPick={() => pickDoc(setJoiningUpload, joiningPromiseRef, 'joiningLetter')}
+              onClear={() => { setJoiningUpload(null); joiningPromiseRef.current = null; }}
+              error={fieldErrors.joiningLetter}
+            />
 
             {error ? (
               <View style={styles.errorBox}>
@@ -490,19 +562,49 @@ export default function StudentRegisterScreen() {
 // File Picker
 // ---------------------------------------------------------------------------
 
-function FilePicker({ label, file, onPick, onClear, error }: {
-  label: string; file: PickedFile | null; onPick: () => void; onClear: () => void; error?: string;
+function FilePicker({ label, uploadState, onPick, onClear, error }: {
+  label: string;
+  uploadState: FileUploadState | null;
+  onPick: () => void;
+  onClear: () => void;
+  error?: string;
 }) {
+  const { file, status, error: uploadError } = uploadState ?? {};
+
   return (
     <View style={styles.fileField}>
       <Text style={styles.fileLabel}>{label}</Text>
       {file ? (
-        <View style={styles.fileRow}>
-          <MaterialIcons name="description" size={22} color={colors.success} />
-          <Text style={styles.fileName} numberOfLines={1}>{file.name}</Text>
-          <Pressable onPress={onClear} hitSlop={8}>
-            <MaterialIcons name="close" size={20} color={colors.danger} />
-          </Pressable>
+        <View style={[
+          styles.fileRow,
+          status === 'error' && styles.fileRowError,
+        ]}>
+          {status === 'uploading' ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : status === 'done' ? (
+            <MaterialIcons name="check-circle" size={22} color={colors.success} />
+          ) : status === 'error' ? (
+            <MaterialIcons name="error" size={22} color={colors.danger} />
+          ) : (
+            <MaterialIcons name="description" size={22} color={colors.success} />
+          )}
+          <View style={{ flex: 1 }}>
+            <Text style={styles.fileName} numberOfLines={1}>{file.name}</Text>
+            {status === 'uploading' && (
+              <Text style={styles.fileStatusText}>Uploading…</Text>
+            )}
+            {status === 'done' && (
+              <Text style={[styles.fileStatusText, { color: colors.success }]}>Uploaded ✓</Text>
+            )}
+            {status === 'error' && (
+              <Text style={[styles.fileStatusText, { color: colors.danger }]}>{uploadError}</Text>
+            )}
+          </View>
+          {status !== 'uploading' && (
+            <Pressable onPress={onClear} hitSlop={8}>
+              <MaterialIcons name="close" size={20} color={colors.danger} />
+            </Pressable>
+          )}
         </View>
       ) : (
         <Pressable style={styles.filePicker} onPress={onPick}>
@@ -636,6 +738,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: spacing.md,
     backgroundColor: colors.successBg, borderRadius: radius.md, padding: spacing.md,
   },
-  fileName: { flex: 1, fontSize: fontSize.small, color: colors.text, fontWeight: '600' },
+  fileRowError: { backgroundColor: colors.dangerBg },
+  fileName: { fontSize: fontSize.small, color: colors.text, fontWeight: '600' },
+  fileStatusText: { fontSize: fontSize.caption, color: colors.textMuted, marginTop: 2 },
   fileError: { marginTop: spacing.xs, fontSize: fontSize.small, color: colors.danger },
 });
