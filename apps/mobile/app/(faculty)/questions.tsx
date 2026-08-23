@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useState } from 'react';
-import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import DraggableFlatList, {
@@ -339,7 +339,8 @@ export default function QuestionsScreen() {
   );
 
   return (
-    <GestureHandlerRootView style={styles.container}>
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <GestureHandlerRootView style={{ flex: 1 }}>
       {/* Gradient Header */}
       <LinearGradient
         colors={['#414fb8', '#5b6abf', '#7b85d4']}
@@ -405,6 +406,7 @@ export default function QuestionsScreen() {
         </Pressable>
       </Modal>
     </GestureHandlerRootView>
+    </KeyboardAvoidingView>
   );
 }
 
