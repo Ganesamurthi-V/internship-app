@@ -300,4 +300,4 @@ cd backend && pnpm prisma:migrate   # new migration after a schema change
 
 admin@smvec.ac.in — admin
 faculty@smvec.ac.in — faculty, CSE
-praveen@ / divya@ / arjun@smvec.ac.in — students
+praveen@ / divya@ / arjun@smvec.ac.in — students.
