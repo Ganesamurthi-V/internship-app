@@ -125,8 +125,8 @@ export default function StudentRegisterScreen() {
   const [successMessage, setSuccessMessage] = useState('');
 
   // Store in-flight upload promises so submit can await them
-  const offerPromiseRef = useRef<Promise<PreRegistrationUpload> | null>(null);
-  const joiningPromiseRef = useRef<Promise<PreRegistrationUpload> | null>(null);
+  const offerPromiseRef = useRef<Promise<PreRegistrationUpload | null> | null>(null);
+  const joiningPromiseRef = useRef<Promise<PreRegistrationUpload | null> | null>(null);
 
   const set = <K extends keyof FormData>(key: K, value: FormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -137,7 +137,7 @@ export default function StudentRegisterScreen() {
   /** Pick a PDF and immediately start uploading it in the background. */
   const pickDoc = async (
     setUploadState: (s: FileUploadState | null) => void,
-    promiseRef: React.MutableRefObject<Promise<PreRegistrationUpload> | null>,
+    promiseRef: React.MutableRefObject<Promise<PreRegistrationUpload | null> | null>,
     fieldKey: string,
   ) => {
     const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf', copyToCacheDirectory: true });
@@ -161,7 +161,7 @@ export default function StudentRegisterScreen() {
       .catch((err) => {
         const msg = err instanceof ApiError ? err.message : 'Upload failed. Try again.';
         setUploadState({ file: picked, status: 'error', error: msg });
-        throw err;
+        return null;
       });
 
     promiseRef.current = promise;

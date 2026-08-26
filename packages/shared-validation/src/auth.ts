@@ -58,7 +58,7 @@ export const studentRegisterSchema = z.object({
   // Internship details
   organisationName: z.string().trim().min(2, { message: 'Organisation name is required.' }).max(200),
   organisationLocation: z.string().trim().max(200).nullable().optional(),
-  internshipDomain: z.enum(INTERNSHIP_DOMAINS).nullable().optional(),
+  internshipDomain: z.string().trim().max(100).nullable().optional(),
   internshipMode: z.enum(INTERNSHIP_MODES).nullable().optional(),
   startDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/u, { message: 'Enter a valid date (YYYY-MM-DD).' }).nullable().optional(),
   endDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/u, { message: 'Enter a valid date (YYYY-MM-DD).' }).nullable().optional(),
