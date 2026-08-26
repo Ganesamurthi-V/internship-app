@@ -18,7 +18,7 @@ import { studentLoginSchema } from '@ims/shared-validation';
 import { ok, parseJson, withErrorHandling } from '@/lib/http';
 import { unauthorized } from '@/lib/errors';
 import { prisma } from '@/lib/prisma';
-import { supabaseAdmin } from '@/lib/supabase';
+import { createSupabaseSignInClient, supabaseAdmin } from '@/lib/supabase';
 import { buildAuthenticatedUser } from '@/server/auth/identity';
 
 export const POST = withErrorHandling(async (request: NextRequest) => {
@@ -55,20 +55,24 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
   }
 
   // 3. Sign in via Supabase — the student's Supabase password is their mobile number.
-  const { data: signInData, error: signInError } = await supabaseAdmin().auth.signInWithPassword({
+  //
+  // A throwaway client, never the shared admin one: signing in would store this
+  // student's session on that cached instance and downgrade every later
+  // service-role call on the same warm Lambda to `authenticated`.
+  const { data: signInData, error: signInError } = await createSupabaseSignInClient().auth.signInWithPassword({
     email: student.studentEmail,
     password: storedMobile,
   });
 
   if (signInError || !signInData.session) {
-    // This can happen if the Supabase Auth user has a different password
-    // Try to update the password to match the current mobile
+    // This can happen if the Supabase Auth user has a different password.
+    // Resetting it needs service-role, so that call does use the admin client.
     await supabaseAdmin().auth.admin.updateUserById(student.user.authId, {
       password: storedMobile,
     });
 
-    // Retry sign-in
-    const { data: retryData, error: retryError } = await supabaseAdmin().auth.signInWithPassword({
+    // Retry sign-in on a fresh client, for the same reason as above.
+    const { data: retryData, error: retryError } = await createSupabaseSignInClient().auth.signInWithPassword({
       email: student.studentEmail,
       password: storedMobile,
     });

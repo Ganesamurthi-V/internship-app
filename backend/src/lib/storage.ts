@@ -71,7 +71,13 @@ export async function createSignedUploadUrl(storageKey: string): Promise<SignedU
     .createSignedUploadUrl(storageKey);
 
   if (error || !data) {
-    logger.error({ storageKey, error: error?.message }, 'Failed to create signed upload URL');
+    // `storage.objects` has RLS on with no policies, so anything other than
+    // service_role is rejected. An RLS error here means this client is not acting
+    // as service_role — usually because a sign-in mutated the shared admin client.
+    logger.error(
+      { storageKey, bucket: env.STORAGE_BUCKET, error: error?.message },
+      'Failed to create signed upload URL',
+    );
     throw serverError('Could not start the upload. Try again.');
   }
 

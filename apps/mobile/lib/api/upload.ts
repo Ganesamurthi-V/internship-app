@@ -14,6 +14,7 @@
  * directly from the file URI.
  */
 
+import { File, UploadType } from 'expo-file-system';
 import type { DocumentMeta, UploadUrlResponse } from '@ims/shared-types';
 import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } from '@ims/shared-types';
 import { api, ApiError } from './client';
@@ -46,27 +47,24 @@ export function validateFile(file: PickedFile): string | null {
 }
 
 /**
- * PUTs raw file bytes to a signed Supabase Storage URL.
+ * PUTs raw file bytes to a signed Supabase Storage URL using Expo's File class.
  *
- * Uses fetch with a file URI blob. React Native's fetch handles file:// URIs
- * natively when passed as the body of a request.
+ * This avoids React Native's fetch + blob path which goes through a base64
+ * roundtrip that is slow and can corrupt binary files.
  */
 async function putToSignedUrl(fileUri: string, uploadUrl: string, mimeType: string): Promise<void> {
-  // React Native fetch can handle file URIs via a blob created from the URI
-  const response = await fetch(fileUri);
-  const blob = await response.blob();
-
-  const uploadResponse = await fetch(uploadUrl, {
-    method: 'PUT',
+  const file = new File(fileUri);
+  const result = await file.upload(uploadUrl, {
+    httpMethod: 'PUT',
     headers: { 'Content-Type': mimeType },
-    body: blob,
+    uploadType: UploadType.BINARY_CONTENT,
   });
 
-  if (!uploadResponse.ok) {
+  if (result.status < 200 || result.status >= 300) {
     throw new ApiError({
       code: 'SERVER_ERROR',
       message: 'The file could not be uploaded. Check your connection and try again.',
-      status: uploadResponse.status,
+      status: result.status,
     });
   }
 }
