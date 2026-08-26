@@ -11,13 +11,12 @@
  * at the top shows progress and lets the student tap back to a completed step.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import ConfettiCannon from 'react-native-confetti-cannon';
 import type { InternshipDomain, InternshipMode } from '@ims/shared-types';
 import {
   INTERNSHIP_DOMAINS,
@@ -807,32 +806,12 @@ function AccountCreatedModal({
   message: string;
   onClose: () => void;
 }) {
-  const confettiRef = useRef<any>(null);
-
-  useEffect(() => {
-    if (visible && confettiRef.current) {
-      // Small delay so the modal animates in first
-      setTimeout(() => confettiRef.current?.start(), 300);
-    }
-  }, [visible]);
-
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={modalStyles.overlay}>
         <View style={modalStyles.card}>
-          {/* Header illustration with sparkles */}
+          {/* Central green checkmark badge */}
           <View style={modalStyles.illustrationContainer}>
-            {/* Sparkles / diamonds around the checkmark */}
-            <View style={[modalStyles.sparkle, { top: 12, left: 24, backgroundColor: '#FACC15', width: 9, height: 9 }]} />
-            <View style={[modalStyles.sparkle, { top: 0, left: 62, backgroundColor: '#93C5FD', width: 11, height: 11 }]} />
-            <View style={[modalStyles.sparkle, { top: 4, right: 62, backgroundColor: '#FB7185', width: 9, height: 9 }]} />
-            <View style={[modalStyles.sparkle, { top: 14, right: 24, backgroundColor: '#34D399', width: 10, height: 10 }]} />
-            <View style={[modalStyles.sparkle, { top: 46, left: 44, backgroundColor: '#F472B6', width: 8, height: 8 }]} />
-            <View style={[modalStyles.sparkle, { top: 46, right: 44, backgroundColor: '#FDE047', width: 9, height: 9 }]} />
-            <View style={[modalStyles.sparkle, { top: 60, left: 20, backgroundColor: '#2DD4BF', width: 8, height: 8 }]} />
-            <View style={[modalStyles.sparkle, { top: 60, right: 20, backgroundColor: '#FB7185', width: 7, height: 7 }]} />
-
-            {/* Central green checkmark badge */}
             <View style={modalStyles.circle}>
               <MaterialIcons name="check" size={42} color="#059669" />
             </View>
@@ -852,20 +831,6 @@ function AccountCreatedModal({
             <Text style={modalStyles.buttonText}>Got it</Text>
           </Pressable>
         </View>
-
-        {/* Confetti effect */}
-        {visible && (
-          <ConfettiCannon
-            ref={confettiRef}
-            count={150}
-            origin={{ x: -10, y: 0 }}
-            autoStart={true}
-            fadeOut={true}
-            fallSpeed={3000}
-            explosionSpeed={350}
-            colors={['#414fb8', '#FACC15', '#34D399', '#FB7185', '#93C5FD', '#F472B6', '#2DD4BF', '#FDE047']}
-          />
-        )}
       </View>
     </Modal>
   );
@@ -899,7 +864,6 @@ const modalStyles = StyleSheet.create({
     height: 84,
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
     marginBottom: 16,
   },
   circle: {
@@ -909,11 +873,6 @@ const modalStyles = StyleSheet.create({
     backgroundColor: '#DCFCE7',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  sparkle: {
-    position: 'absolute',
-    borderRadius: 2,
-    transform: [{ rotate: '45deg' }],
   },
   title: {
     fontSize: 22,
