@@ -262,8 +262,20 @@ export async function assertDocumentAccess(
 
   if (isAdmin(auth)) return document;
 
-  // Otherwise the only route in is through the submission it belongs to.
-  const student = document.submission?.student;
+  // Otherwise the only route in is through the submission it belongs to,
+  // OR through the student who owns the document (e.g. registration uploads
+  // like offer/joining letters that are never attached to a submission).
+  let student = document.submission?.student ?? null;
+
+  // Fallback: check if the owner is a student in the faculty's scope.
+  if (!student) {
+    const ownerStudent = await prisma.student.findFirst({
+      where: { userId: document.ownerUserId },
+      select: { id: true, departmentId: true },
+    });
+    if (ownerStudent) student = ownerStudent;
+  }
+
   if (!student) {
     throw forbidden('You do not have permission to do that.');
   }
