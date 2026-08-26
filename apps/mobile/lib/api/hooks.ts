@@ -307,7 +307,8 @@ export function useDepartments() {
     queryKey: queryKeys.reference.departments,
     // Departments change at most once a semester.
     staleTime: 60 * 60 * 1000,
-    queryFn: () => api.get<Department[]>('/departments'),
+    // Anonymous: the student registration form needs this before a session exists.
+    queryFn: () => api.anonymous.get<Department[]>('/departments'),
   });
 }
 

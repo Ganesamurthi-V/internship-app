@@ -16,8 +16,8 @@ import { recordAudit } from '@/lib/audit';
 import { env } from '@/lib/env';
 
 export const GET = withErrorHandling(async (request: NextRequest) => {
-  await requireAuth(request);
-
+  // Public endpoint — department names are not sensitive and needed by
+  // the student registration form before the user has an account.
   const departments = await prisma.department.findMany({ orderBy: { name: 'asc' } });
   // Small, bounded reference list — departments change at most once a semester.
   return cachedOk(departments.map(serializeDepartment), 3600);

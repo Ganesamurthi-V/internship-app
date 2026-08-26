@@ -37,8 +37,14 @@ export const POST = withErrorHandling(async (request: NextRequest, context: Rout
 
   if (!student) throw notFound('Student not found.');
 
-  if (auth.role === 'faculty' && auth.departmentId !== student.departmentId) {
-    throw forbidden('You can only manage students in your department.');
+  // Same strict department check as approve — two nulls must not compare equal.
+  if (auth.role === 'faculty') {
+    if (!auth.departmentId) {
+      throw forbidden('No department is assigned to your account. Contact an admin.');
+    }
+    if (student.departmentId !== auth.departmentId) {
+      throw forbidden('You can only manage students in your department.');
+    }
   }
 
   if (student.user.status === 'suspended') {

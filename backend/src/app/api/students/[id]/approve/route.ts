@@ -31,9 +31,16 @@ export const POST = withErrorHandling(async (request: NextRequest, context: Rout
 
   if (!student) throw notFound('Student not found.');
 
-  // Faculty can only approve students in their own department
-  if (auth.role === 'faculty' && auth.departmentId !== student.departmentId) {
-    throw forbidden('You can only approve students in your department.');
+  // Faculty can only approve students in their own department. Both sides must be a
+  // real department: comparing two nulls with `!==` would silently pass and let a
+  // faculty with no department approve a student with no department.
+  if (auth.role === 'faculty') {
+    if (!auth.departmentId) {
+      throw forbidden('No department is assigned to your account. Contact an admin.');
+    }
+    if (student.departmentId !== auth.departmentId) {
+      throw forbidden('You can only approve students in your department.');
+    }
   }
 
   if (student.user.status === 'active') {

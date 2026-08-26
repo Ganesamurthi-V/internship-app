@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { ChipGroup, type ChipOption } from '@/components/ui/Chips';
 import { api, ApiError } from '@/lib/api/client';
+import { useDepartments } from '@/lib/api/hooks';
 import { uploadFileAnonymous, type PickedFile, type PreRegistrationUpload } from '@/lib/api/upload';
 import { colors, fontSize, radius, spacing } from '@/constants/theme';
 
@@ -48,21 +49,9 @@ interface FileUploadState {
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEPARTMENTS = [
-  'Electrical and Electronics Engineering',
-  'Electronics and Communication Engineering',
-  'Computer Science and Engineering',
-  'Information Technology',
-  'Instrumentation and Control Engineering',
-  'Mechanical Engineering',
-  'Civil Engineering',
-  'Biomedical Engineering',
-  'Mechatronics',
-  'Computer Science and Business Systems',
-  'Computer and Communication Engineering',
-  'Artificial Intelligence and Data Science',
-  'Fashion Technology',
-] as const;
+// Departments come from the database (`useDepartments`) rather than a local list.
+// The student's `departmentId` is what scopes them to a faculty reviewer, so the
+// picker has to offer real department rows, not just display names.
 
 const YEARS = ['1', '2', '3', '4'] as const;
 const STEPS = ['Personal', 'Internship', 'Mentor', 'Documents'] as const;
@@ -71,6 +60,7 @@ interface FormData {
   name: string;
   registerNumber: string;
   department: string;
+  departmentId: string;
   year: string;
   section: string;
   email: string;
@@ -91,7 +81,7 @@ interface FormData {
 }
 
 const INITIAL: FormData = {
-  name: '', registerNumber: '', department: '', year: '', section: '',
+  name: '', registerNumber: '', department: '', departmentId: '', year: '', section: '',
   email: '', mobile: '', organisationName: '', organisationLocation: '',
   internshipDomain: null, otherDomain: '', internshipMode: null,
   startDate: '', endDate: '', totalDuration: '', workingHoursPerDay: '',
@@ -113,6 +103,7 @@ const modeOptions: ChipOption<InternshipMode>[] = INTERNSHIP_MODES.map((m) => ({
 export default function StudentRegisterScreen() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormData>(INITIAL);
+  const { data: departments } = useDepartments();
   const [offerUpload, setOfferUpload] = useState<FileUploadState | null>(null);
   const [joiningUpload, setJoiningUpload] = useState<FileUploadState | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -176,7 +167,9 @@ export default function StudentRegisterScreen() {
     if (s === 0) {
       if (!form.name.trim()) errs.name = 'Required';
       if (!form.registerNumber.trim()) errs.registerNumber = 'Required';
-      if (!form.department) errs.department = 'Required';
+      // departmentId is what scopes the student to a faculty reviewer, so the
+      // form must not proceed on the display name alone.
+      if (!form.departmentId) errs.department = 'Required';
       if (!form.year) errs.year = 'Required';
       if (!form.section.trim()) errs.section = 'Required';
       if (!form.email.trim()) errs.email = 'Required';
@@ -265,6 +258,7 @@ export default function StudentRegisterScreen() {
         name: form.name.trim(),
         registerNumber: form.registerNumber.trim().toUpperCase(),
         programme: form.department,
+        departmentId: form.departmentId || null,
         year: form.year ? Number(form.year) : undefined,
         section: form.section.trim().toUpperCase(),
         studentEmail: form.email.trim().toLowerCase(),
@@ -389,11 +383,15 @@ export default function StudentRegisterScreen() {
               {showDeptPicker && (
                 <View style={styles.dropdownList}>
                   <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
-                    {DEPARTMENTS.map((dept) => (
-                      <Pressable key={dept} style={styles.dropdownItem}
-                        onPress={() => { set('department', dept); setShowDeptPicker(false); }}>
-                        <Text style={[styles.dropdownItemText, form.department === dept && styles.dropdownItemActive]}>
-                          {dept}
+                    {(departments ?? []).map((dept) => (
+                      <Pressable key={dept.id} style={styles.dropdownItem}
+                        onPress={() => {
+                          set('department', dept.name);
+                          set('departmentId', dept.id);
+                          setShowDeptPicker(false);
+                        }}>
+                        <Text style={[styles.dropdownItemText, form.departmentId === dept.id && styles.dropdownItemActive]}>
+                          {dept.name}
                         </Text>
                       </Pressable>
                     ))}

@@ -16,11 +16,17 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
   const auth = await requireAuth(request);
   requireReviewer(auth);
 
+  // Faculty are strictly scoped to their own department. A faculty account with no
+  // department owns no students, so it must match nothing rather than everything —
+  // falling through to an unfiltered query would leak every department's students.
+  const departmentScope: Prisma.StudentWhereInput =
+    auth.role === 'faculty'
+      ? { departmentId: auth.departmentId ?? '00000000-0000-0000-0000-000000000000' }
+      : {};
+
   const where: Prisma.StudentWhereInput = {
     user: { status: 'pending' },
-    ...(auth.role === 'faculty' && auth.departmentId
-      ? { departmentId: auth.departmentId }
-      : {}),
+    ...departmentScope,
   };
 
   const students = await prisma.student.findMany({
