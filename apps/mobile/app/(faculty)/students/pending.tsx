@@ -210,8 +210,23 @@ export default function PendingStudentsScreen() {
 }
 
 // ---------------------------------------------------------------------------
-// Student Detail Modal — shows all registration info page by page
+// Student Detail Modal — full-screen, matches design screenshot
 // ---------------------------------------------------------------------------
+
+const PAGE_DEFS = [
+  { label: 'Personal',   icon: 'person-outline'     as const },
+  { label: 'Internship', icon: 'work-outline'        as const },
+  { label: 'Mentor',     icon: 'groups'              as const },
+  { label: 'Documents',  icon: 'description'         as const },
+];
+
+// Icon and subtitle shown in the white card header per page
+const PAGE_HEADER: { icon: keyof typeof MaterialIcons.glyphMap; subtitle: string }[] = [
+  { icon: 'person',       subtitle: "Review and verify the student's personal information." },
+  { icon: 'work',         subtitle: "Details about the student's internship placement." },
+  { icon: 'people',       subtitle: "Industry mentor and faculty coordinator information." },
+  { icon: 'description',  subtitle: 'Uploaded verification documents.' },
+];
 
 function StudentDetailModal({
   student,
@@ -230,7 +245,6 @@ function StudentDetailModal({
   const [docViewerUrl, setDocViewerUrl] = useState('');
   const [docViewerName, setDocViewerName] = useState('');
   const [docViewerVisible, setDocViewerVisible] = useState(false);
-  const pages = ['Personal', 'Internship', 'Mentor', 'Documents'];
 
   const openDocument = async (docId: string | null, name: string) => {
     if (!docId) { Alert.alert('No document', 'No file was uploaded.'); return; }
@@ -247,130 +261,132 @@ function StudentDetailModal({
     }
   };
 
+  const ph = PAGE_HEADER[page]!;
+
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <View style={detailStyles.container}>
-        {/* Header */}
-        <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[detailStyles.header, { paddingTop: insets.top + 12 }]}>
-          <View style={detailStyles.headerRow}>
-            <Pressable onPress={onClose} style={detailStyles.closeBtn}>
-              <MaterialIcons name="close" size={22} color="#fff" />
+      <View style={ds.root}>
+        {/* ── Gradient header ── */}
+        <LinearGradient
+          colors={['#414fb8', '#5b6abf', '#7b85d4']}
+          style={[ds.gradHeader, { paddingTop: insets.top + 14 }]}
+        >
+          <View style={ds.gradHeaderRow}>
+            <Pressable onPress={onClose} style={ds.closeCircle}>
+              <MaterialIcons name="close" size={20} color="#fff" />
             </Pressable>
             <View style={{ flex: 1 }}>
-              <Text style={detailStyles.headerName}>{student.name}</Text>
-              <Text style={detailStyles.headerSub}>{student.registerNumber} \u00b7 {student.departmentName ?? student.programme}</Text>
+              <Text style={ds.gradName}>{student.name}</Text>
+              <Text style={ds.gradSub}>
+                {student.registerNumber}
+                {(student.departmentName ?? student.programme) ? ` • ${student.departmentName ?? student.programme}` : ''}
+              </Text>
             </View>
           </View>
         </LinearGradient>
 
-        {/* Page tabs */}
-        <View style={detailStyles.tabs}>
-          {pages.map((label, i) => (
-            <Pressable key={label} style={[detailStyles.tab, page === i && detailStyles.tabActive]} onPress={() => setPage(i)}>
-              <Text style={[detailStyles.tabText, page === i && detailStyles.tabTextActive]}>{label}</Text>
+        {/* ── Tab bar with icons ── */}
+        <View style={ds.tabBar}>
+          {PAGE_DEFS.map(({ label, icon }, i) => (
+            <Pressable key={label} style={ds.tabItem} onPress={() => setPage(i)}>
+              <MaterialIcons
+                name={icon}
+                size={20}
+                color={page === i ? colors.primary : colors.textMuted}
+              />
+              <Text style={[ds.tabLabel, page === i && ds.tabLabelActive]}>{label}</Text>
+              {page === i && <View style={ds.tabUnderline} />}
             </Pressable>
           ))}
         </View>
 
-        {/* Content */}
-        <ScrollView contentContainerStyle={detailStyles.content} showsVerticalScrollIndicator={false}>
-          {page === 0 && (
-            <View style={detailStyles.section}>
-              <Text style={detailStyles.sectionTitle}>Personal Details</Text>
-              <InfoRow label="Full Name" value={student.name} />
-              <InfoRow label="Register Number" value={student.registerNumber} />
-              <InfoRow label="Department" value={student.departmentName ?? student.programme} />
-              <InfoRow label="Year" value={student.year ? String(student.year) : '-'} />
-              <InfoRow label="Section" value={student.section ?? '-'} />
-              <InfoRow label="Email" value={student.email} />
-              <InfoRow label="Mobile" value={student.mobile} />
-              <InfoRow label="Registered On" value={new Date(student.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} />
-            </View>
-          )}
-
-          {page === 1 && (
-            <View style={detailStyles.section}>
-              <Text style={detailStyles.sectionTitle}>Internship Details</Text>
-              <InfoRow label="Organisation" value={student.organisationName ?? '-'} />
-              <InfoRow label="Location" value={student.organisationLocation ?? '-'} />
-              <InfoRow label="Domain" value={student.internshipDomain ?? '-'} />
-              <InfoRow label="Mode" value={student.internshipMode ?? '-'} />
-              <InfoRow label="Start Date" value={student.startDate ?? '-'} />
-              <InfoRow label="End Date" value={student.endDate ?? '-'} />
-              <InfoRow label="Duration" value={student.durationDays ? `${student.durationDays} days` : '-'} />
-              <InfoRow label="Hours / Day" value={student.workingHoursPerDay ? String(student.workingHoursPerDay) : '-'} />
-            </View>
-          )}
-
-          {page === 2 && (
-            <View style={detailStyles.section}>
-              <Text style={detailStyles.sectionTitle}>Mentor Details</Text>
-              <InfoRow label="Mentor Name" value={student.mentorName ?? '-'} />
-              <InfoRow label="Designation" value={student.mentorDesignation ?? '-'} />
-              <InfoRow label="Contact" value={student.mentorContact ?? '-'} />
-              <InfoRow label="Faculty Coordinator" value={student.facultyCoordinator ?? '-'} />
-            </View>
-          )}
-
-          {page === 3 && (
-            <View style={detailStyles.section}>
-              <Text style={detailStyles.sectionTitle}>Documents</Text>
-
-              <View style={detailStyles.docCard}>
-                <View style={detailStyles.docIcon}>
-                  <MaterialIcons name="picture-as-pdf" size={22} color={student.offerLetterDocId ? colors.primary : colors.textFaint} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={detailStyles.docTitle}>Internship Offer Letter</Text>
-                  <Text style={detailStyles.docStatus}>{student.offerLetterDocId ? 'Uploaded' : 'Not uploaded'}</Text>
-                </View>
-                {student.offerLetterDocId && (
-                  <Pressable style={detailStyles.viewDocBtn} onPress={() => void openDocument(student.offerLetterDocId, 'Offer Letter.pdf')} disabled={opening}>
-                    <MaterialIcons name="open-in-new" size={16} color={colors.primary} />
-                    <Text style={detailStyles.viewDocText}>{opening ? 'Opening...' : 'View'}</Text>
-                  </Pressable>
-                )}
+        {/* ── Scrollable body ── */}
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={ds.body}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* White card with icon + page title */}
+          <View style={ds.sectionCard}>
+            <View style={ds.sectionCardHeader}>
+              <View style={ds.sectionIconBox}>
+                <MaterialIcons name={ph.icon} size={22} color={colors.primary} />
               </View>
-
-              <View style={detailStyles.docCard}>
-                <View style={detailStyles.docIcon}>
-                  <MaterialIcons name="picture-as-pdf" size={22} color={student.joiningLetterDocId ? colors.primary : colors.textFaint} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={detailStyles.docTitle}>Joining Letter / Proof</Text>
-                  <Text style={detailStyles.docStatus}>{student.joiningLetterDocId ? 'Uploaded' : 'Not uploaded'}</Text>
-                </View>
-                {student.joiningLetterDocId && (
-                  <Pressable style={detailStyles.viewDocBtn} onPress={() => void openDocument(student.joiningLetterDocId, 'Joining Letter.pdf')} disabled={opening}>
-                    <MaterialIcons name="open-in-new" size={16} color={colors.primary} />
-                    <Text style={detailStyles.viewDocText}>{opening ? 'Opening...' : 'View'}</Text>
-                  </Pressable>
-                )}
+              <View style={{ flex: 1 }}>
+                <Text style={ds.sectionCardTitle}>{PAGE_DEFS[page]!.label} Details</Text>
+                <Text style={ds.sectionCardSub}>{ph.subtitle}</Text>
               </View>
+            </View>
 
+            {/* Personal page */}
+            {page === 0 && <>
+              <IRow icon="person"            label="Full Name"      value={student.name} />
+              <IRow icon="badge"             label="Register Number" value={student.registerNumber} />
+              <IRow icon="account-balance"   label="Department"     value={student.departmentName ?? student.programme} />
+              <IRow icon="school"            label="Year"           value={student.year ? String(student.year) : '—'} />
+              <IRow icon="groups"            label="Section"        value={student.section ?? '—'} />
+              <IRow icon="email"             label="Email"          value={student.email} />
+              <IRow icon="phone"             label="Mobile"         value={student.mobile} last />
+              <IRow icon="calendar-month"    label="Registered On"  value={new Date(student.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })} last />
+            </>}
+
+            {/* Internship page */}
+            {page === 1 && <>
+              <IRow icon="business"          label="Organisation"   value={student.organisationName ?? '—'} />
+              <IRow icon="location-on"       label="Location"       value={student.organisationLocation ?? '—'} />
+              <IRow icon="code"              label="Domain"         value={student.internshipDomain ?? '—'} />
+              <IRow icon="laptop"            label="Mode"           value={student.internshipMode ?? '—'} />
+              <IRow icon="event"             label="Start Date"     value={student.startDate ?? '—'} />
+              <IRow icon="event-busy"        label="End Date"       value={student.endDate ?? '—'} />
+              <IRow icon="hourglass-empty"   label="Duration"       value={student.durationDays ? `${student.durationDays} days` : '—'} />
+              <IRow icon="schedule"          label="Hours / Day"    value={student.workingHoursPerDay ? String(student.workingHoursPerDay) : '—'} last />
+            </>}
+
+            {/* Mentor page */}
+            {page === 2 && <>
+              <IRow icon="person"            label="Mentor Name"        value={student.mentorName ?? '—'} />
+              <IRow icon="work"              label="Designation"        value={student.mentorDesignation ?? '—'} />
+              <IRow icon="contact-phone"     label="Contact"            value={student.mentorContact ?? '—'} />
+              <IRow icon="supervisor-account" label="Faculty Coordinator" value={student.facultyCoordinator ?? '—'} last />
+            </>}
+
+            {/* Documents page */}
+            {page === 3 && <>
+              <DocRow
+                label="Internship Offer Letter"
+                uploaded={!!student.offerLetterDocId}
+                opening={opening}
+                onView={() => void openDocument(student.offerLetterDocId, 'Offer Letter.pdf')}
+              />
+              <DocRow
+                label="Joining Letter / Proof"
+                uploaded={!!student.joiningLetterDocId}
+                opening={opening}
+                onView={() => void openDocument(student.joiningLetterDocId, 'Joining Letter.pdf')}
+                last
+              />
               {!student.offerLetterDocId && !student.joiningLetterDocId && (
-                <View style={detailStyles.noDocsBox}>
-                  <MaterialIcons name="info-outline" size={18} color={colors.textMuted} />
-                  <Text style={detailStyles.noDocsText}>No documents were uploaded during registration.</Text>
+                <View style={ds.noDocsBox}>
+                  <MaterialIcons name="info-outline" size={16} color={colors.textMuted} />
+                  <Text style={ds.noDocsText}>No documents uploaded during registration.</Text>
                 </View>
               )}
-            </View>
-          )}
+            </>}
+          </View>
         </ScrollView>
 
-        {/* Bottom actions */}
-        <View style={[detailStyles.footer, { paddingBottom: insets.bottom + 12 }]}>
-          <Pressable style={detailStyles.footerRejectBtn} onPress={onReject}>
+        {/* ── Footer action buttons ── */}
+        <View style={[ds.footer, { paddingBottom: insets.bottom + 12 }]}>
+          <Pressable style={ds.rejectBtn} onPress={onReject}>
             <MaterialIcons name="close" size={18} color={colors.danger} />
-            <Text style={detailStyles.footerRejectText}>Reject</Text>
+            <Text style={ds.rejectText}>Reject</Text>
           </Pressable>
-          <Pressable style={detailStyles.footerApproveBtn} onPress={onApprove}>
+          <Pressable style={ds.approveBtn} onPress={onApprove}>
             <MaterialIcons name="check" size={18} color="#fff" />
-            <Text style={detailStyles.footerApproveText}>Approve</Text>
+            <Text style={ds.approveText}>Approve</Text>
           </Pressable>
         </View>
 
-        {/* Inline document viewer */}
         <DocumentViewer
           visible={docViewerVisible}
           url={docViewerUrl}
@@ -383,20 +399,59 @@ function StudentDetailModal({
   );
 }
 
-function DetailRow({ icon, value }: { icon: string; value: string }) {
+// Row with a rounded-square icon on the left, label and value
+function IRow({
+  icon,
+  label,
+  value,
+  last,
+}: {
+  icon: keyof typeof MaterialIcons.glyphMap;
+  label: string;
+  value: string;
+  last?: boolean;
+}) {
   return (
-    <View style={styles.detailRow}>
-      <MaterialIcons name={icon as any} size={15} color={colors.textMuted} />
-      <Text style={styles.detailValue} numberOfLines={1}>{value}</Text>
+    <View style={[ds.iRow, last && { borderBottomWidth: 0 }]}>
+      <View style={ds.iIconBox}>
+        <MaterialIcons name={icon} size={18} color={colors.primary} />
+      </View>
+      <Text style={ds.iLabel}>{label}</Text>
+      <Text style={ds.iValue} numberOfLines={2}>{value}</Text>
     </View>
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+function DocRow({
+  label,
+  uploaded,
+  opening,
+  onView,
+  last,
+}: {
+  label: string;
+  uploaded: boolean;
+  opening: boolean;
+  onView: () => void;
+  last?: boolean;
+}) {
   return (
-    <View style={detailStyles.infoRow}>
-      <Text style={detailStyles.infoLabel}>{label}</Text>
-      <Text style={detailStyles.infoValue}>{value}</Text>
+    <View style={[ds.iRow, last && { borderBottomWidth: 0 }]}>
+      <View style={ds.iIconBox}>
+        <MaterialIcons name="description" size={18} color={uploaded ? colors.primary : colors.textFaint} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={ds.iLabel}>{label}</Text>
+        <Text style={[ds.docStatus, { color: uploaded ? colors.success : colors.textFaint }]}>
+          {uploaded ? 'Uploaded ✓' : 'Not uploaded'}
+        </Text>
+      </View>
+      {uploaded && (
+        <Pressable style={ds.viewBtn} onPress={onView} disabled={opening}>
+          <MaterialIcons name="open-in-new" size={14} color={colors.primary} />
+          <Text style={ds.viewBtnText}>{opening ? '...' : 'View'}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -438,35 +493,59 @@ const styles = StyleSheet.create({
   emptyBody: { fontSize: 13, color: colors.textMuted },
 });
 
-const detailStyles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  header: { paddingHorizontal: 20, paddingBottom: 16 },
-  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  closeBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff20', alignItems: 'center', justifyContent: 'center' },
-  headerName: { fontSize: 18, fontWeight: '800', color: '#fff' },
-  headerSub: { fontSize: 12, color: '#ffffffcc', marginTop: 2 },
-  tabs: { flexDirection: 'row', backgroundColor: '#fff', paddingHorizontal: 8, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  tab: { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 8 },
-  tabActive: { backgroundColor: '#eceef8' },
-  tabText: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
-  tabTextActive: { color: colors.primary, fontWeight: '700' },
-  content: { padding: 16, paddingBottom: 100 },
-  section: { gap: 0 },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 16 },
-  infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  infoLabel: { fontSize: 13, color: colors.textMuted, flex: 1 },
-  infoValue: { fontSize: 14, fontWeight: '600', color: colors.text, flex: 1.5, textAlign: 'right' },
-  docCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 10, ...shadow.card },
-  docIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#eceef8', alignItems: 'center', justifyContent: 'center' },
-  docTitle: { fontSize: 14, fontWeight: '600', color: colors.text },
-  docStatus: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  viewDocBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: '#eceef8' },
-  viewDocText: { fontSize: 12, fontWeight: '700', color: colors.primary },
+function DetailRow({ icon, value }: { icon: string; value: string }) {
+  return (
+    <View style={styles.detailRow}>
+      <MaterialIcons name={icon as any} size={15} color={colors.textMuted} />
+      <Text style={styles.detailValue} numberOfLines={1}>{value}</Text>
+    </View>
+  );
+}
+
+const ds = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.background },
+
+  // Gradient header
+  gradHeader: { paddingHorizontal: 20, paddingBottom: 18 },
+  gradHeaderRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 14 },
+  closeCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff25', alignItems: 'center', justifyContent: 'center', marginTop: 2 },
+  gradName: { fontSize: 22, fontWeight: '800', color: '#fff' },
+  gradSub: { fontSize: 13, color: '#ffffffcc', marginTop: 3 },
+
+  // Tab bar
+  tabBar: { flexDirection: 'row', backgroundColor: '#fff', paddingHorizontal: 4, paddingTop: 6, paddingBottom: 0, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  tabItem: { flex: 1, alignItems: 'center', paddingVertical: 8, gap: 3, position: 'relative' },
+  tabLabel: { fontSize: 11, fontWeight: '600', color: colors.textMuted },
+  tabLabelActive: { color: colors.primary, fontWeight: '700' },
+  tabUnderline: { position: 'absolute', bottom: 0, left: '10%', right: '10%', height: 2.5, borderRadius: 2, backgroundColor: colors.primary },
+
+  // Body
+  body: { padding: 14, paddingBottom: 80 },
+
+  // White section card
+  sectionCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, ...shadow.card },
+  sectionCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 18, paddingBottom: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  sectionIconBox: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#eceef8', alignItems: 'center', justifyContent: 'center' },
+  sectionCardTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
+  sectionCardSub: { fontSize: 12, color: colors.textMuted, marginTop: 2, lineHeight: 16 },
+
+  // Info rows
+  iRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 13, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border, gap: 12 },
+  iIconBox: { width: 34, height: 34, borderRadius: 9, backgroundColor: '#eceef8', alignItems: 'center', justifyContent: 'center' },
+  iLabel: { flex: 1, fontSize: 14, color: colors.textMuted },
+  iValue: { flex: 1.4, fontSize: 14, fontWeight: '700', color: colors.text, textAlign: 'right' },
+
+  // Document rows
+  docStatus: { fontSize: 12, marginTop: 2 },
+  viewBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: '#eceef8' },
+  viewBtnText: { fontSize: 12, fontWeight: '700', color: colors.primary },
   noDocsBox: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.surfaceAlt, borderRadius: 10, padding: 14, marginTop: 8 },
   noDocsText: { fontSize: 13, color: colors.textMuted, flex: 1 },
+
+  // Footer
   footer: { flexDirection: 'row', gap: 12, paddingHorizontal: 16, paddingTop: 12, backgroundColor: '#fff', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
-  footerRejectBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 12, borderWidth: 1, borderColor: colors.danger },
-  footerRejectText: { fontSize: 14, fontWeight: '700', color: colors.danger },
-  footerApproveBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, borderRadius: 12, backgroundColor: colors.primary },
-  footerApproveText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  rejectBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 15, borderRadius: 12, borderWidth: 1.5, borderColor: colors.danger },
+  rejectText: { fontSize: 15, fontWeight: '700', color: colors.danger },
+  approveBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 15, borderRadius: 12, backgroundColor: colors.primary },
+  approveText: { fontSize: 15, fontWeight: '700', color: '#fff' },
 });

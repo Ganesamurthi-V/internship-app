@@ -48,8 +48,24 @@ export async function issueUploadUrl(
 ): Promise<IssuedUpload> {
   // Guard the per-submission ceiling early: a student who has already attached the
   // maximum should be told before uploading bytes, not after.
+  // Exclude registration documents (offer/joining letters stored on the student row)
+  // so those don't count against the per-submission file limit.
+  const studentRecord = await prisma.student.findFirst({
+    where: { userId: auth.userId },
+    select: { offerLetterDocId: true, joiningLetterDocId: true },
+  });
+  const registrationDocIds = [
+    studentRecord?.offerLetterDocId,
+    studentRecord?.joiningLetterDocId,
+  ].filter(Boolean) as string[];
+
   const unattached = await prisma.document.count({
-    where: { ownerUserId: auth.userId, submissionId: null, deletedAt: null },
+    where: {
+      ownerUserId: auth.userId,
+      submissionId: null,
+      deletedAt: null,
+      ...(registrationDocIds.length > 0 ? { id: { notIn: registrationDocIds } } : {}),
+    },
   });
 
   if (unattached >= MAX_FILES_PER_SUBMISSION) {
