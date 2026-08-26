@@ -3,11 +3,12 @@
  */
 
 import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Linking, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { DocumentViewer } from '@/components/ui/DocumentViewer';
 import type { DocumentMeta } from '@ims/shared-types';
 import { REVIEW_NOTE_MIN_LENGTH, REVIEW_NOTE_MAX_LENGTH } from '@ims/shared-types';
 import { Button } from '@/components/ui/Button';
@@ -27,6 +28,9 @@ export default function ReviewDetailScreen() {
   const [note, setNote] = useState('');
   const [noteError, setNoteError] = useState<string | undefined>();
   const [opening, setOpening] = useState<string | null>(null);
+  const [docViewerUrl, setDocViewerUrl] = useState('');
+  const [docViewerName, setDocViewerName] = useState('');
+  const [docViewerVisible, setDocViewerVisible] = useState(false);
 
   const onApprove = (): void => {
     Alert.alert(
@@ -71,7 +75,9 @@ export default function ReviewDetailScreen() {
     setOpening(file.id);
     try {
       const result = await api.get<{ downloadUrl: string }>(`/documents/${file.id}`);
-      await Linking.openURL(result.downloadUrl);
+      setDocViewerUrl(result.downloadUrl);
+      setDocViewerName(file.originalFilename);
+      setDocViewerVisible(true);
     } catch (e) {
       Alert.alert('Could not open', e instanceof Error ? e.message : 'Try again.');
     } finally {
@@ -237,6 +243,14 @@ export default function ReviewDetailScreen() {
         )}
       </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Inline document viewer */}
+      <DocumentViewer
+        visible={docViewerVisible}
+        url={docViewerUrl}
+        filename={docViewerName}
+        onClose={() => setDocViewerVisible(false)}
+      />
     </View>
   );
 }

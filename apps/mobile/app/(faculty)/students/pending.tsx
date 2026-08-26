@@ -3,13 +3,14 @@
  */
 
 import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
+import { DocumentViewer } from '@/components/ui/DocumentViewer';
 import { api, ApiError } from '@/lib/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { colors, fontSize, shadow, spacing } from '@/constants/theme';
@@ -226,14 +227,19 @@ function StudentDetailModal({
   const insets = useSafeAreaInsets();
   const [page, setPage] = useState(0);
   const [opening, setOpening] = useState(false);
+  const [docViewerUrl, setDocViewerUrl] = useState('');
+  const [docViewerName, setDocViewerName] = useState('');
+  const [docViewerVisible, setDocViewerVisible] = useState(false);
   const pages = ['Personal', 'Internship', 'Mentor', 'Documents'];
 
-  const openDocument = async (docId: string | null) => {
+  const openDocument = async (docId: string | null, name: string) => {
     if (!docId) { Alert.alert('No document', 'No file was uploaded.'); return; }
     setOpening(true);
     try {
       const result = await api.get<{ downloadUrl: string }>(`/documents/${docId}`);
-      await Linking.openURL(result.downloadUrl);
+      setDocViewerUrl(result.downloadUrl);
+      setDocViewerName(name);
+      setDocViewerVisible(true);
     } catch (e) {
       Alert.alert('Could not open', e instanceof Error ? e.message : 'Try again.');
     } finally {
@@ -319,7 +325,7 @@ function StudentDetailModal({
                   <Text style={detailStyles.docStatus}>{student.offerLetterDocId ? 'Uploaded' : 'Not uploaded'}</Text>
                 </View>
                 {student.offerLetterDocId && (
-                  <Pressable style={detailStyles.viewDocBtn} onPress={() => void openDocument(student.offerLetterDocId)} disabled={opening}>
+                  <Pressable style={detailStyles.viewDocBtn} onPress={() => void openDocument(student.offerLetterDocId, 'Offer Letter.pdf')} disabled={opening}>
                     <MaterialIcons name="open-in-new" size={16} color={colors.primary} />
                     <Text style={detailStyles.viewDocText}>{opening ? 'Opening...' : 'View'}</Text>
                   </Pressable>
@@ -335,7 +341,7 @@ function StudentDetailModal({
                   <Text style={detailStyles.docStatus}>{student.joiningLetterDocId ? 'Uploaded' : 'Not uploaded'}</Text>
                 </View>
                 {student.joiningLetterDocId && (
-                  <Pressable style={detailStyles.viewDocBtn} onPress={() => void openDocument(student.joiningLetterDocId)} disabled={opening}>
+                  <Pressable style={detailStyles.viewDocBtn} onPress={() => void openDocument(student.joiningLetterDocId, 'Joining Letter.pdf')} disabled={opening}>
                     <MaterialIcons name="open-in-new" size={16} color={colors.primary} />
                     <Text style={detailStyles.viewDocText}>{opening ? 'Opening...' : 'View'}</Text>
                   </Pressable>
@@ -363,6 +369,15 @@ function StudentDetailModal({
             <Text style={detailStyles.footerApproveText}>Approve</Text>
           </Pressable>
         </View>
+
+        {/* Inline document viewer */}
+        <DocumentViewer
+          visible={docViewerVisible}
+          url={docViewerUrl}
+          filename={docViewerName}
+          mimeType="application/pdf"
+          onClose={() => setDocViewerVisible(false)}
+        />
       </View>
     </Modal>
   );
