@@ -23,7 +23,8 @@ import { TextField } from '@/components/ui/TextField';
 import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { FormSkeleton } from '@/components/ui/SkeletonLoader';
-import { ApiError } from '@/lib/api/client';
+import { DocumentViewer } from '@/components/ui/DocumentViewer';
+import { api, ApiError } from '@/lib/api/client';
 import { useSubmitAnswers, useTodayForm } from '@/lib/api/hooks';
 import { uploadFile, validateFile, type PickedFile } from '@/lib/api/upload';
 import { colors, fontSize, radius, shadow, spacing } from '@/constants/theme';
@@ -43,6 +44,24 @@ export default function AnswerScreen() {
   /** Maps questionId → uploaded file metadata for file_upload type questions */
   const [uploadedFileMap, setUploadedFileMap] = useState<Record<string, DocumentMeta>>({});
 
+  const [docViewerUrl, setDocViewerUrl] = useState('');
+  const [docViewerName, setDocViewerName] = useState('');
+  const [docViewerMime, setDocViewerMime] = useState('application/pdf');
+  const [docViewerVisible, setDocViewerVisible] = useState(false);
+
+  /** Opens one of the student's own uploaded files in the in-app viewer. */
+  const onViewFile = async (file: DocumentMeta): Promise<void> => {
+    try {
+      const result = await api.get<{ downloadUrl: string }>(`/documents/${file.id}`);
+      setDocViewerUrl(result.downloadUrl);
+      setDocViewerName(file.originalFilename);
+      setDocViewerMime(file.mimeType);
+      setDocViewerVisible(true);
+    } catch (e) {
+      Alert.alert('Could not open', e instanceof Error ? e.message : 'Try again.');
+    }
+  };
+
   /**
    * Seeds the form from an existing submission so a resubmission starts from what
    * was written before, rather than making the student retype everything after a
@@ -51,10 +70,20 @@ export default function AnswerScreen() {
   useEffect(() => {
     if (!form?.submission) return;
     const seeded: Record<string, string> = {};
+    const seededFiles: Record<string, DocumentMeta> = {};
+
     for (const answer of form.submission.answers) {
       seeded[answer.questionId] = answer.answerText;
+      // A file answer carries its document, so an already-uploaded file shows its
+      // real name and stays viewable after a reload instead of reading
+      // "File attached" with no way to check it.
+      if (answer.document) {
+        seededFiles[answer.questionId] = answer.document;
+      }
     }
+
     setAnswers(seeded);
+    setUploadedFileMap(seededFiles);
   }, [form?.submission]);
 
   const questions = form?.questions ?? [];
@@ -144,9 +173,17 @@ export default function AnswerScreen() {
       // Optional questions left blank send nothing rather than an empty row.
       .filter((entry) => entry.answerText.length > 0);
 
+    // The server also derives these from the file answers themselves, but sending
+    // them keeps the request self-describing.
+    const documentIds = questions
+      .filter((question) => question.type === 'file_upload')
+      .map((question) => answers[question.id])
+      .filter((value): value is string => Boolean(value));
+
     try {
       await submit.mutateAsync({
         answers: payload,
+        ...(documentIds.length > 0 ? { documentIds } : {}),
       });
 
       Alert.alert(
@@ -251,6 +288,7 @@ export default function AnswerScreen() {
             }
           }}
           uploadedFiles={uploadedFileMap}
+          onViewFile={(file) => void onViewFile(file)}
         />
       ))}
 
@@ -278,6 +316,14 @@ export default function AnswerScreen() {
       ) : null}
       </ScrollView>
       </KeyboardAvoidingView>
+
+      <DocumentViewer
+        visible={docViewerVisible}
+        url={docViewerUrl}
+        filename={docViewerName}
+        mimeType={docViewerMime}
+        onClose={() => setDocViewerVisible(false)}
+      />
     </View>
   );
 }
@@ -291,6 +337,7 @@ function QuestionField({
   editable,
   onChange,
   uploadedFiles,
+  onViewFile,
 }: {
   index: number;
   question: Question;
@@ -299,6 +346,7 @@ function QuestionField({
   editable: boolean;
   onChange: (value: string) => void;
   uploadedFiles: Record<string, DocumentMeta>;
+  onViewFile: (file: DocumentMeta) => void;
 }) {
   const counter =
     question.maxLength && (question.type === 'text' || question.type === 'long_text') ? (
@@ -337,6 +385,13 @@ function QuestionField({
               </Text>
               <Text style={styles.fileSize}>{formatSize(fileInfo.sizeBytes)}</Text>
             </View>
+            <Text
+              style={styles.viewLink}
+              onPress={() => onViewFile(fileInfo)}
+              accessibilityRole="button"
+            >
+              View
+            </Text>
             {editable ? (
               <Text
                 style={styles.changeLink}
@@ -348,7 +403,8 @@ function QuestionField({
             ) : null}
           </View>
         ) : value.length > 0 ? (
-          // Has a document ID from a previous submission but we don't have the metadata
+          // A document id with no metadata: the file exists but was deleted, or the
+          // submission predates answers carrying their document.
           <View style={styles.uploadedFileRow}>
             <MaterialIcons name="attach-file" size={22} color={colors.success} />
             <Text style={styles.fileName}>File attached</Text>
@@ -523,5 +579,6 @@ const styles = StyleSheet.create({
   fileInfo: { flex: 1 },
   fileName: { fontSize: fontSize.small, color: colors.text, fontWeight: '600' },
   fileSize: { fontSize: fontSize.caption, color: colors.textMuted },
-  changeLink: { fontSize: fontSize.small, color: colors.primary, fontWeight: '700' },
+  viewLink: { fontSize: fontSize.small, color: colors.primary, fontWeight: '700' },
+  changeLink: { fontSize: fontSize.small, color: colors.textMuted, fontWeight: '700' },
 });

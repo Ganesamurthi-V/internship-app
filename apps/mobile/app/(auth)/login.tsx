@@ -267,8 +267,8 @@ export default function LoginScreen() {
             <Pressable onPress={() => { setActiveTab('faculty'); setEmail('ganesh@smvec.ac.in'); setPassword('ganesh123'); }} style={styles.devRow}>
               <Text style={styles.devText}>Faculty: ganesh@smvec.ac.in / ganesh123</Text>
             </Pressable>
-            <Pressable onPress={() => { setActiveTab('faculty'); setEmail('ganesh@smvec.ac.in'); setPassword('Internship1'); }} style={styles.devRow}>
-              <Text style={styles.devText}>admin: admin@smvec.ac.in / Internship1</Text>
+            <Pressable onPress={() => { setActiveTab('faculty'); setEmail('admin@smvec.ac.in'); setPassword('Internship1'); }} style={styles.devRow}>
+              <Text style={styles.devText}>Admin: admin@smvec.ac.in / Internship1</Text>
             </Pressable>
           </View>
         ) : null}

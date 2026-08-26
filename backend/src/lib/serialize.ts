@@ -279,14 +279,34 @@ type AnswerRow = {
   questionId: string;
   promptSnapshot: string;
   answerText: string;
+  question?: { type: string } | null;
 };
 
-export function serializeAnswer(row: AnswerRow): Answer {
+/**
+ * `documentsById` resolves a `file_upload` answer to its file.
+ *
+ * A file answer stores the document id in `answerText`, which is meaningless to
+ * display. Resolving it here means every screen showing an answer gets the file
+ * without needing to know that encoding, or making a second request.
+ *
+ * A missing entry yields `document: null` rather than throwing: a deleted file
+ * should degrade one row, not fail the whole submission.
+ */
+export function serializeAnswer(
+  row: AnswerRow,
+  documentsById?: ReadonlyMap<string, DocumentMeta>,
+): Answer {
+  const questionType = row.question?.type as QuestionType | undefined;
+
   return {
     id: row.id,
     questionId: row.questionId,
     promptSnapshot: row.promptSnapshot,
     answerText: row.answerText,
+    ...(questionType ? { questionType } : {}),
+    ...(questionType === 'file_upload'
+      ? { document: documentsById?.get(row.answerText) ?? null }
+      : {}),
   };
 }
 
@@ -333,10 +353,13 @@ type SubmissionDetailRow = SubmissionRow & {
  * copy of their own summary.
  */
 export function serializeSubmissionDetail(row: SubmissionDetailRow): DailySubmissionDetail {
+  const documents = row.documents.map(serializeDocument);
+  const documentsById = new Map(documents.map((document) => [document.id, document]));
+
   return {
     ...serializeSubmission(row),
-    answers: row.answers.map(serializeAnswer),
-    documents: row.documents.map(serializeDocument),
+    answers: row.answers.map((answer) => serializeAnswer(answer, documentsById)),
+    documents,
     ...(row.student ? { student: serializeStudentSummary(row.student) } : {}),
     ...(row.reviewedBy
       ? { reviewedByName: row.reviewedBy.name ?? row.reviewedBy.email.split('@')[0]! }

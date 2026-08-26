@@ -111,7 +111,10 @@ export default function StudentHistoryScreen() {
                   {item.answers[0].promptSnapshot}
                 </Text>
                 <Text style={styles.previewText} numberOfLines={2}>
-                  {item.answers[0].answerText}
+                  {/* A file answer holds a document id, which is meaningless to read. */}
+                  {item.answers[0].questionType === 'file_upload'
+                    ? (item.answers[0].document?.originalFilename ?? 'File attached')
+                    : item.answers[0].answerText}
                 </Text>
               </View>
             ) : null}

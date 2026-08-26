@@ -140,7 +140,21 @@ export interface Answer {
    * later edit to the question does not silently rewrite past history.
    */
   promptSnapshot: string;
+  /**
+   * For a `file_upload` question this holds the document id, not prose. Clients
+   * should render `document` instead of this value — see `questionType`.
+   */
   answerText: string;
+  /**
+   * The question's type at read time, so a client can render the answer without a
+   * second lookup. Without it a `file_upload` answer displays as a bare UUID.
+   */
+  questionType?: QuestionType;
+  /**
+   * The uploaded file, for a `file_upload` answer. Null when the question is not a
+   * file upload, or when the referenced document is missing or deleted.
+   */
+  document?: DocumentMeta | null;
 }
 
 /**

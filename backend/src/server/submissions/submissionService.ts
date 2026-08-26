@@ -37,6 +37,13 @@ import type { AuthContext } from '@/lib/auth/context';
 import { isReviewer, submissionScopeFilter } from '@/lib/auth/guards';
 import { listActiveQuestions } from '@/server/questions/questionService';
 
+/**
+ * Guards the derivation of document ids from file answers. A `file_upload` answer
+ * should always hold a uuid, but an older or hand-written row might hold prose, and
+ * feeding that to a uuid column throws at the database instead of being ignored.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
 // ---------------------------------------------------------------------------
 // Selects
 // ---------------------------------------------------------------------------
@@ -56,7 +63,15 @@ const submissionSelect = {
 const submissionDetailSelect = {
   ...submissionSelect,
   answers: {
-    select: { id: true, questionId: true, promptSnapshot: true, answerText: true },
+    select: {
+      id: true,
+      questionId: true,
+      promptSnapshot: true,
+      answerText: true,
+      // Needed so the serializer can tell a file answer from prose and resolve the
+      // referenced document; otherwise a file answer renders as a bare UUID.
+      question: { select: { type: true } },
+    },
     orderBy: { createdAt: 'asc' },
   },
   documents: {
@@ -223,8 +238,23 @@ export async function submitAnswers(
     throw validationError('Some answers need attention.', validation.fields);
   }
 
+  // A `file_upload` answer stores its document id as the answer text, so those
+  // documents must be attached too. Deriving them here rather than trusting the
+  // client to also list them in `documentIds` is what stops a file answer from
+  // pointing at a document that was never linked to the submission — which left
+  // reviewers looking at a bare UUID with no file behind it.
+  const fileQuestionIds = new Set(
+    questions.filter((question) => question.type === 'file_upload').map((question) => question.id),
+  );
+
+  const answerDocumentIds = validation.answers
+    .filter((answer) => fileQuestionIds.has(answer.questionId))
+    .map((answer) => answer.answerText.trim())
+    .filter((value) => UUID_PATTERN.test(value));
+
+  const documentIds = [...new Set([...(input.documentIds ?? []), ...answerDocumentIds])];
+
   // Only files the caller uploaded and has not already attached elsewhere.
-  const documentIds = input.documentIds ?? [];
   if (documentIds.length > 0) {
     const owned = await prisma.document.count({
       where: {
@@ -270,6 +300,18 @@ export async function submitAnswers(
         promptSnapshot: answer.promptSnapshot,
         answerText: answer.answerText,
       })),
+    });
+
+    // Release files that were attached before but are no longer referenced, so
+    // replacing a file on a resubmission does not leave the old one hanging off the
+    // submission and visible to the reviewer as a stale attachment.
+    await tx.document.updateMany({
+      where: {
+        submissionId: record.id,
+        ownerUserId: auth.userId,
+        ...(documentIds.length > 0 ? { id: { notIn: documentIds } } : {}),
+      },
+      data: { submissionId: null },
     });
 
     if (documentIds.length > 0) {

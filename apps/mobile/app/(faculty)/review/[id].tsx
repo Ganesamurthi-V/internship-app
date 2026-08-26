@@ -120,6 +120,13 @@ export default function ReviewDetailScreen() {
 
   const isPending = submission.status === 'pending';
 
+  // Documents already rendered inline with their question, so the file list below
+  // shows only genuinely separate attachments.
+  const answeredDocumentIds = new Set(
+    submission.answers.map((answer) => answer.document?.id).filter(Boolean) as string[],
+  );
+  const extraDocuments = submission.documents.filter((d) => !answeredDocumentIds.has(d.id));
+
   return (
     <View style={styles.container}>
       <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
@@ -166,19 +173,53 @@ export default function ReviewDetailScreen() {
                 </View>
                 <Text style={styles.answerPrompt}>{answer.promptSnapshot}</Text>
               </View>
-              <Text style={styles.answerText}>{answer.answerText}</Text>
+
+              {/* A file answer stores a document id, so render the file rather than
+                  the raw id the student never typed. */}
+              {answer.questionType === 'file_upload' ? (
+                answer.document ? (
+                  <Pressable style={styles.fileRow} onPress={() => void onOpenFile(answer.document!)}>
+                    <View style={styles.fileIcon}>
+                      <MaterialIcons
+                        name={answer.document.mimeType === 'application/pdf' ? 'picture-as-pdf' : 'image'}
+                        size={18}
+                        color={colors.primary}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fileName} numberOfLines={1}>
+                        {answer.document.originalFilename}
+                      </Text>
+                      <Text style={styles.fileSize}>{formatSize(answer.document.sizeBytes)}</Text>
+                    </View>
+                    <Text style={styles.openLink}>
+                      {opening === answer.document.id ? 'Opening...' : 'View'}
+                    </Text>
+                  </Pressable>
+                ) : (
+                  <View style={styles.missingFileBox}>
+                    <MaterialIcons name="error-outline" size={16} color={colors.warning} />
+                    <Text style={styles.missingFileText}>
+                      The student answered with a file, but it is no longer available.
+                    </Text>
+                  </View>
+                )
+              ) : (
+                <Text style={styles.answerText}>{answer.answerText}</Text>
+              )}
             </View>
           ))
         )}
 
-        {/* Files */}
-        {submission.documents.length > 0 ? (
+        {/* Files — only extras. Files that answer a question are shown with that
+            question above, so listing them again here reads as duplicates. */}
+        {extraDocuments.length > 0 ? (
           <View style={styles.card}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
               <MaterialIcons name="attach-file" size={18} color={colors.primary} />
-              <Text style={styles.sectionTitle}>Files ({submission.documents.length})</Text>
+              <Text style={styles.sectionTitle}>Other files ({extraDocuments.length})</Text>
             </View>
-            {submission.documents.map((file) => (
+            {extraDocuments.map((file) => (
               <Pressable key={file.id} style={styles.fileRow} onPress={() => void onOpenFile(file)}>
                 <View style={styles.fileIcon}>
                   <MaterialIcons
@@ -290,4 +331,6 @@ const styles = StyleSheet.create({
   fileName: { fontSize: 13, color: colors.text, fontWeight: '600' },
   fileSize: { fontSize: 11, color: colors.textMuted },
   openLink: { fontSize: 13, color: colors.primary, fontWeight: '700' },
+  missingFileBox: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.warningBg, borderRadius: 10, padding: 12 },
+  missingFileText: { flex: 1, fontSize: 12, color: colors.text, lineHeight: 17 },
 });
