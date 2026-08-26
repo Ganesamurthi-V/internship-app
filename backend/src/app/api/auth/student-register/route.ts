@@ -33,7 +33,7 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
 
   if (existing) {
     throw conflict('This register number is already registered. Use Student Login instead.', {
-      registerNumber: 'Already registered.',
+      registerNumber: 'This register number is already registered.',
     });
   }
 
@@ -45,7 +45,7 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
 
   if (existingEmail) {
     throw conflict('This email is already in use.', {
-      studentEmail: 'Already registered.',
+      studentEmail: 'This email is already registered.',
     });
   }
 
@@ -63,7 +63,7 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
   if (authError) {
     if (authError.message?.includes('already been registered')) {
       throw conflict('This email is already registered with the authentication service.', {
-        studentEmail: 'Already registered.',
+        studentEmail: 'This email is already registered.',
       });
     }
     throw serverError(`Could not create account: ${authError.message}`);
