@@ -11,12 +11,13 @@
  * at the top shows progress and lets the student tap back to a completed step.
  */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import ConfettiCannon from 'react-native-confetti-cannon';
 import type { InternshipDomain, InternshipMode } from '@ims/shared-types';
 import {
   INTERNSHIP_DOMAINS,
@@ -160,6 +161,15 @@ export default function StudentRegisterScreen() {
 
   const fmtDate = (d: Date): string => d.toISOString().slice(0, 10);
 
+  /** Calculate days between two date strings (YYYY-MM-DD). */
+  const calcDuration = (start: string, end: string): string => {
+    if (!start || !end) return '';
+    const s = new Date(`${start}T00:00:00Z`);
+    const e = new Date(`${end}T00:00:00Z`);
+    const diff = Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24));
+    return diff > 0 ? String(diff) : '';
+  };
+
   // ─── Step validation ───
   const validateStep = (s: number): boolean => {
     const errs: Record<string, string> = {};
@@ -182,7 +192,15 @@ export default function StudentRegisterScreen() {
       if (!form.internshipMode) errs.internshipMode = 'Required';
       if (!form.startDate) errs.startDate = 'Required';
       if (!form.endDate) errs.endDate = 'Required';
-      if (!form.totalDuration.trim()) errs.totalDuration = 'Required';
+      // Duration auto-calculated from dates; validate it was computed
+      if (!form.totalDuration.trim() && form.startDate && form.endDate) {
+        // Re-compute in case it didn't fire
+        const dur = calcDuration(form.startDate, form.endDate);
+        if (dur) set('totalDuration', dur);
+        else errs.totalDuration = 'End date must be after start date';
+      } else if (!form.totalDuration.trim()) {
+        errs.totalDuration = 'Select both dates';
+      }
       if (!form.workingHoursPerDay.trim()) errs.workingHoursPerDay = 'Required';
     } else if (s === 2) {
       if (!form.mentorName.trim()) errs.mentorName = 'Required';
@@ -471,7 +489,7 @@ export default function StudentRegisterScreen() {
                 {showStartDate && (
                   <DateTimePicker value={form.startDate ? new Date(form.startDate) : new Date()}
                     mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                    onValueChange={(_, d) => { setShowStartDate(Platform.OS === 'ios'); if (d) set('startDate', fmtDate(d)); }} />
+                    onValueChange={(_, d) => { setShowStartDate(Platform.OS === 'ios'); if (d) { set('startDate', fmtDate(d)); set('totalDuration', calcDuration(fmtDate(d), form.endDate)); } }} />
                 )}
                 {fieldErrors.startDate ? <Text style={styles.fieldError}>{fieldErrors.startDate}</Text> : null}
               </View>
@@ -486,7 +504,7 @@ export default function StudentRegisterScreen() {
                 {showEndDate && (
                   <DateTimePicker value={form.endDate ? new Date(form.endDate) : new Date()}
                     mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                    onValueChange={(_, d) => { setShowEndDate(Platform.OS === 'ios'); if (d) set('endDate', fmtDate(d)); }} />
+                    onValueChange={(_, d) => { setShowEndDate(Platform.OS === 'ios'); if (d) { set('endDate', fmtDate(d)); set('totalDuration', calcDuration(form.startDate, fmtDate(d))); } }} />
                 )}
                 {fieldErrors.endDate ? <Text style={styles.fieldError}>{fieldErrors.endDate}</Text> : null}
               </View>
@@ -495,8 +513,9 @@ export default function StudentRegisterScreen() {
             <View style={styles.row}>
               <View style={styles.halfField}>
                 <TextField label="Duration (days)" required value={form.totalDuration}
-                  onChangeText={(t) => set('totalDuration', t.replace(/[^0-9]/g, ''))}
-                  placeholder="45" keyboardType="numeric" error={fieldErrors.totalDuration} />
+                  onChangeText={() => {}}
+                  placeholder="Auto-calculated" keyboardType="numeric" error={fieldErrors.totalDuration}
+                  editable={false} />
               </View>
               <View style={styles.halfField}>
                 <TextField label="Hours / Day" required value={form.workingHoursPerDay}
@@ -788,6 +807,15 @@ function AccountCreatedModal({
   message: string;
   onClose: () => void;
 }) {
+  const confettiRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (visible && confettiRef.current) {
+      // Small delay so the modal animates in first
+      setTimeout(() => confettiRef.current?.start(), 300);
+    }
+  }, [visible]);
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={modalStyles.overlay}>
@@ -824,6 +852,20 @@ function AccountCreatedModal({
             <Text style={modalStyles.buttonText}>Got it</Text>
           </Pressable>
         </View>
+
+        {/* Confetti effect */}
+        {visible && (
+          <ConfettiCannon
+            ref={confettiRef}
+            count={150}
+            origin={{ x: -10, y: 0 }}
+            autoStart={true}
+            fadeOut={true}
+            fallSpeed={3000}
+            explosionSpeed={350}
+            colors={['#414fb8', '#FACC15', '#34D399', '#FB7185', '#93C5FD', '#F472B6', '#2DD4BF', '#FDE047']}
+          />
+        )}
       </View>
     </Modal>
   );

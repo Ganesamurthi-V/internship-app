@@ -53,20 +53,44 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
   const mobile = input.mobile.replace(/[\s()-]/gu, '');
 
   // Create Supabase Auth user
-  const { data: authData, error: authError } = await supabaseAdmin().auth.admin.createUser({
+  let { data: authData, error: authError } = await supabaseAdmin().auth.admin.createUser({
     email: input.studentEmail,
     password: mobile,
     email_confirm: true,
     user_metadata: { role: 'student', name: input.name },
   });
 
-  if (authError) {
-    if (authError.message?.includes('already been registered')) {
+  // Supabase Auth lives in `auth.users`, a different table from `public.users`.
+  // Deleting the app rows (or a half-failed earlier attempt) leaves the auth
+  // account behind, which would otherwise lock that email out forever.
+  //
+  // We already proved above that no app user owns this email, so any auth account
+  // still holding it is unreferenced leftover data. Reclaim it and retry once.
+  if (authError?.message?.includes('already been registered')) {
+    const orphanAuthId = await findAuthUserIdByEmail(input.studentEmail);
+
+    if (!orphanAuthId) {
+      // Supabase says taken but we cannot find it — do not guess, surface it.
       throw conflict('This email is already registered with the authentication service.', {
         studentEmail: 'This email is already registered.',
       });
     }
-    throw serverError(`Could not create account: ${authError.message}`);
+
+    const { error: deleteError } = await supabaseAdmin().auth.admin.deleteUser(orphanAuthId);
+    if (deleteError) {
+      throw serverError(`Could not reclaim the previous account for this email: ${deleteError.message}`);
+    }
+
+    ({ data: authData, error: authError } = await supabaseAdmin().auth.admin.createUser({
+      email: input.studentEmail,
+      password: mobile,
+      email_confirm: true,
+      user_metadata: { role: 'student', name: input.name },
+    }));
+  }
+
+  if (authError || !authData?.user) {
+    throw serverError(`Could not create account: ${authError?.message ?? 'unknown error'}`);
   }
 
   const authId = authData.user.id;
@@ -202,6 +226,30 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
     status: 'pending',
   });
 });
+
+/**
+ * Finds a Supabase Auth user id by email.
+ *
+ * The admin API has no get-by-email, so this walks the paginated listing. Capped at
+ * 10 pages (2000 accounts) so a large project cannot turn one registration into an
+ * unbounded scan; a single college's roster sits well inside that.
+ */
+async function findAuthUserIdByEmail(email: string): Promise<string | null> {
+  const needle = email.toLowerCase();
+  const maxPages = 10;
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const { data, error } = await supabaseAdmin().auth.admin.listUsers({ page, perPage: 200 });
+    if (error || data.users.length === 0) return null;
+
+    const match = data.users.find((u) => u.email?.toLowerCase() === needle);
+    if (match) return match.id;
+
+    if (data.users.length < 200) return null;
+  }
+
+  return null;
+}
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
