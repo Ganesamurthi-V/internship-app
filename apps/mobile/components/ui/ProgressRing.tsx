@@ -1,104 +1,70 @@
 /**
- * Approval percentage ring.
+ * Circular progress ring using SVG for pixel-perfect rendering.
  *
- * Drawn with nested Views rather than SVG: the app has no SVG dependency, and a ring
- * is expressible as a rotated half-disc. That keeps the bundle smaller and avoids
- * `react-native-svg`, which needs its own native build.
- *
- * The implementation uses the classic two-half-circle technique. Each half is a
- * semicircle clipped by its container and rotated by an angle derived from the
- * percentage, so 0–50% rotates the right half and 50–100% also rotates the left.
+ * At 100% the ring is fully filled. As the percentage decreases, the colored arc
+ * shrinks proportionally, starting from 12 o'clock going clockwise.
  */
 
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, fontSize } from '@/constants/theme';
+import Svg, { Circle } from 'react-native-svg';
+import { colors } from '@/constants/theme';
 
 interface ProgressRingProps {
   /** 0–100. Values outside are clamped. */
   percentage: number;
   size?: number;
-  thickness?: number;
-  label?: string;
-  /** Small caption under the percentage, e.g. "42 of 45 days". */
+  strokeWidth?: number;
+  /** Small caption under the percentage, e.g. "1/1 days". */
   caption?: string;
 }
 
 export function ProgressRing({
   percentage,
-  size = 120,
-  thickness = 10,
-  label = 'Approved',
+  size = 90,
+  strokeWidth = 8,
   caption,
 }: ProgressRingProps) {
   const clamped = Math.max(0, Math.min(100, percentage));
-
-  // Institutions commonly require 75% attendance, so the ring turns amber
-  // approaching that and red below it.
   const colour =
     clamped >= 85 ? colors.success : clamped >= 75 ? colors.warning : colors.danger;
 
-  const rightRotation = clamped <= 50 ? (clamped / 50) * 180 : 180;
-  const leftRotation = clamped <= 50 ? 0 : ((clamped - 50) / 50) * 180;
-
-  const half = size / 2;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (clamped / 100) * circumference;
 
   return (
     <View
       style={[styles.container, { width: size, height: size }]}
       accessibilityRole="progressbar"
-      accessibilityLabel={label}
       accessibilityValue={{ min: 0, max: 100, now: Math.round(clamped), text: `${clamped}%` }}
     >
-      {/* Track */}
-      <View
-        style={[
-          styles.ring,
-          { width: size, height: size, borderRadius: half, borderWidth: thickness },
-        ]}
-      />
-
-      {/* Right half sweep (0–50%) */}
-      <View style={[styles.clip, { width: half, height: size, left: half }]}>
-        <View
-          style={[
-            styles.ring,
-            styles.sweep,
-            {
-              width: size,
-              height: size,
-              borderRadius: half,
-              borderWidth: thickness,
-              borderTopColor: colour,
-              borderRightColor: colour,
-              left: -half,
-              transform: [{ rotate: `${rightRotation - 45}deg` }],
-            },
-          ]}
+      <Svg width={size} height={size}>
+        {/* Background track */}
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke={colors.surfaceAlt}
+          strokeWidth={strokeWidth}
+          fill="none"
         />
-      </View>
+        {/* Filled arc */}
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke={colour}
+          strokeWidth={strokeWidth}
+          fill="none"
+          strokeDasharray={`${circumference}`}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+          rotation={-90}
+          origin={`${size / 2}, ${size / 2}`}
+        />
+      </Svg>
 
-      {/* Left half sweep (50–100%) */}
-      {clamped > 50 ? (
-        <View style={[styles.clip, { width: half, height: size, left: 0 }]}>
-          <View
-            style={[
-              styles.ring,
-              styles.sweep,
-              {
-                width: size,
-                height: size,
-                borderRadius: half,
-                borderWidth: thickness,
-                borderTopColor: colour,
-                borderRightColor: colour,
-                left: 0,
-                transform: [{ rotate: `${leftRotation + 135}deg` }],
-              },
-            ]}
-          />
-        </View>
-      ) : null}
-
+      {/* Center text */}
       <View style={styles.center}>
         <Text style={[styles.value, { color: colour }]}>{Math.round(clamped)}%</Text>
         {caption ? <Text style={styles.caption}>{caption}</Text> : null}
@@ -109,16 +75,7 @@ export function ProgressRing({
 
 const styles = StyleSheet.create({
   container: { alignItems: 'center', justifyContent: 'center' },
-  ring: {
-    position: 'absolute',
-    borderColor: colors.surfaceAlt,
-  },
-  clip: { position: 'absolute', overflow: 'hidden', top: 0 },
-  sweep: {
-    borderBottomColor: 'transparent',
-    borderLeftColor: 'transparent',
-  },
-  center: { alignItems: 'center', justifyContent: 'center' },
-  value: { fontSize: fontSize.title, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  caption: { fontSize: fontSize.caption, color: colors.textMuted, marginTop: 2 },
+  center: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
+  value: { fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  caption: { fontSize: 10, color: colors.textMuted, marginTop: 1 },
 });

@@ -101,7 +101,7 @@ export default function ReviewQueueScreen() {
                   {item.student?.section ? ` \u00b7 Section ${item.student.section}` : ''}
                 </Text>
                 <Text style={styles.meta}>
-                  {formatDate(item.submissionDate)} \u00b7 {item.answers.length} answer
+                  {formatDate(item.submissionDate)} {'\u00b7'} {item.answers.length} answer
                   {item.answers.length === 1 ? '' : 's'}
                   {item.documents.length > 0
                     ? ` \u00b7 ${item.documents.length} file${item.documents.length === 1 ? '' : 's'}`

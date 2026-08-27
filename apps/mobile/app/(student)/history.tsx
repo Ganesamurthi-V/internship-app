@@ -1,5 +1,5 @@
 /**
- * Student submission history — redesigned with gradient header and modern cards.
+ * Student submission history — with attendance summary, graph, and submission list.
  */
 
 import { useState } from 'react';
@@ -7,12 +7,13 @@ import { FlatList, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import type { SubmissionStatus } from '@ims/shared-types';
+import Svg, { Circle } from 'react-native-svg';
+import type { SubmissionStatus, StudentDashboard as StudentDashboardData } from '@ims/shared-types';
 import { SUBMISSION_STATUSES } from '@ims/shared-types';
 import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { ListSkeleton } from '@/components/ui/SkeletonLoader';
-import { useSubmissionList } from '@/lib/api/hooks';
+import { useDashboard, useSubmissionList } from '@/lib/api/hooks';
 import { colors, fontSize, shadow, spacing } from '@/constants/theme';
 
 type Filter = SubmissionStatus | 'all';
@@ -29,11 +30,14 @@ export default function StudentHistoryScreen() {
   const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState<Filter>('all');
 
+  const { data: dashData } = useDashboard();
   const { data, isLoading, isRefetching, refetch } = useSubmissionList(
     filter === 'all' ? {} : { status: filter },
   );
 
   const items = data?.items ?? [];
+  const dashboard = dashData?.role === 'student' ? (dashData.dashboard as StudentDashboardData) : null;
+  const summary = dashboard?.summary;
 
   return (
     <View style={styles.container}>
@@ -42,7 +46,7 @@ export default function StudentHistoryScreen() {
         style={[styles.header, { paddingTop: insets.top + 16 }]}
       >
         <Text style={styles.headerTitle}>History</Text>
-        <Text style={styles.headerSubtitle}>Your daily submission records</Text>
+        <Text style={styles.headerSubtitle}>Your attendance and submission records</Text>
       </LinearGradient>
 
       <FlatList
@@ -52,13 +56,61 @@ export default function StudentHistoryScreen() {
         refreshing={isRefetching}
         onRefresh={() => void refetch()}
         ListHeaderComponent={
-          <View style={styles.filterRow}>
-            <ChipGroup options={FILTERS} value={filter} onChange={(next) => setFilter(next)} />
-            {data ? (
-              <Text style={styles.count}>
-                {data.pagination.total} day{data.pagination.total === 1 ? '' : 's'}
-              </Text>
-            ) : null}
+          <View>
+            {/* Attendance Summary Card */}
+            {summary && summary.daysSubmitted > 0 && (
+              <View style={styles.attendanceCard}>
+                <View style={styles.attendanceHeader}>
+                  <MaterialIcons name="bar-chart" size={18} color={colors.primary} />
+                  <Text style={styles.attendanceTitle}>Attendance Overview</Text>
+                </View>
+
+                <View style={styles.attendanceBody}>
+                  {/* Progress Ring */}
+                  <View style={styles.ringSection}>
+                    <AttendanceRing percentage={summary.approvalPercentage ?? 0} />
+                    <Text style={styles.ringCaption}>
+                      {summary.daysApproved}/{summary.daysSubmitted} days
+                    </Text>
+                  </View>
+
+                  {/* Stats */}
+                  <View style={styles.statsSection}>
+                    <StatRow icon="check-circle" label="Approved" value={summary.daysApproved} color={colors.success} />
+                    <StatRow icon="schedule" label="Pending" value={summary.daysPending} color={colors.warning} />
+                    <StatRow icon="cancel" label="Declined" value={summary.daysDeclined} color={colors.danger} />
+                    <StatRow icon="event" label="Total Days" value={summary.daysSubmitted} color={colors.primary} />
+                  </View>
+                </View>
+
+                {/* Visual bar graph */}
+                <View style={styles.graphSection}>
+                  <Text style={styles.graphTitle}>Breakdown</Text>
+                  <View style={styles.barRow}>
+                    <View style={styles.barLabelCol}>
+                      <Text style={styles.barLabel}>Approved</Text>
+                      <Text style={styles.barLabel}>Pending</Text>
+                      <Text style={styles.barLabel}>Declined</Text>
+                    </View>
+                    <View style={styles.barCol}>
+                      <BarItem value={summary.daysApproved} max={summary.daysSubmitted} color={colors.success} />
+                      <BarItem value={summary.daysPending} max={summary.daysSubmitted} color={colors.warning} />
+                      <BarItem value={summary.daysDeclined} max={summary.daysSubmitted} color={colors.danger} />
+                    </View>
+                  </View>
+                </View>
+              </View>
+            )}
+
+            {/* Filters */}
+            <View style={styles.filterRow}>
+              <ChipGroup options={FILTERS} value={filter} onChange={(next) => setFilter(next)} />
+              {data ? (
+                <Text style={styles.count}>
+                  {data.pagination.total} day{data.pagination.total === 1 ? '' : 's'}
+                </Text>
+              ) : null}
+            </View>
           </View>
         }
         ListEmptyComponent={
@@ -111,7 +163,6 @@ export default function StudentHistoryScreen() {
                   {item.answers[0].promptSnapshot}
                 </Text>
                 <Text style={styles.previewText} numberOfLines={2}>
-                  {/* A file answer holds a document id, which is meaningless to read. */}
                   {item.answers[0].questionType === 'file_upload'
                     ? (item.answers[0].document?.originalFilename ?? 'File attached')
                     : item.answers[0].answerText}
@@ -125,16 +176,60 @@ export default function StudentHistoryScreen() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function AttendanceRing({ percentage }: { percentage: number }) {
+  const size = 110;
+  const strokeWidth = 10;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.max(0, Math.min(100, percentage));
+  const offset = circumference - (clamped / 100) * circumference;
+  const colour = clamped >= 85 ? colors.success : clamped >= 75 ? colors.warning : colors.danger;
+
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={size} height={size}>
+        <Circle cx={size / 2} cy={size / 2} r={radius} stroke={colors.surfaceAlt} strokeWidth={strokeWidth} fill="none" />
+        <Circle cx={size / 2} cy={size / 2} r={radius} stroke={colour} strokeWidth={strokeWidth} fill="none"
+          strokeDasharray={`${circumference}`} strokeDashoffset={offset} strokeLinecap="round"
+          rotation={-90} origin={`${size / 2}, ${size / 2}`} />
+      </Svg>
+      <Text style={{ position: 'absolute', fontSize: 20, fontWeight: '800', color: colour }}>{Math.round(clamped)}%</Text>
+    </View>
+  );
+}
+
+function StatRow({ icon, label, value, color }: { icon: keyof typeof MaterialIcons.glyphMap; label: string; value: number; color: string }) {
+  return (
+    <View style={styles.statRow}>
+      <MaterialIcons name={icon} size={16} color={color} />
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={[styles.statValue, { color }]}>{value}</Text>
+    </View>
+  );
+}
+
+function BarItem({ value, max, color }: { value: number; max: number; color: string }) {
+  const pct = max > 0 ? Math.max(2, (value / max) * 100) : 2;
+  return (
+    <View style={styles.barTrack}>
+      <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: color }]} />
+      <Text style={styles.barValue}>{value}</Text>
+    </View>
+  );
+}
+
 function formatDate(dateOnly: string): string {
   const date = new Date(`${dateOnly}T00:00:00Z`);
-  return date.toLocaleDateString(undefined, {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
+  return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
+
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
@@ -142,8 +237,35 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 22, fontWeight: '800', color: '#fff' },
   headerSubtitle: { fontSize: 13, color: '#ffffffcc', marginTop: 4 },
   list: { padding: 16, paddingBottom: 100 },
+
+  // Attendance summary card
+  attendanceCard: { backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 14, ...shadow.card },
+  attendanceHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
+  attendanceTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+  attendanceBody: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  ringSection: { alignItems: 'center' },
+  ringCaption: { fontSize: 10, color: colors.textMuted, marginTop: 4 },
+  statsSection: { flex: 1, gap: 8 },
+  statRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statLabel: { flex: 1, fontSize: 13, color: colors.textMuted },
+  statValue: { fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] },
+
+  // Bar graph
+  graphSection: { marginTop: 16, paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },
+  graphTitle: { fontSize: 12, fontWeight: '700', color: colors.textMuted, marginBottom: 10 },
+  barRow: { flexDirection: 'row', gap: 10 },
+  barLabelCol: { width: 70, gap: 10, justifyContent: 'center' },
+  barLabel: { fontSize: 11, color: colors.textMuted },
+  barCol: { flex: 1, gap: 10, justifyContent: 'center' },
+  barTrack: { height: 20, backgroundColor: colors.surfaceAlt, borderRadius: 10, flexDirection: 'row', alignItems: 'center', overflow: 'hidden' },
+  barFill: { height: '100%', borderRadius: 10, minWidth: 4 },
+  barValue: { fontSize: 11, fontWeight: '700', color: colors.text, marginLeft: 8 },
+
+  // Filters
   filterRow: { marginBottom: 12 },
   count: { fontSize: 11, color: colors.textMuted, marginTop: 6 },
+
+  // Submission cards
   card: { backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 10, ...shadow.card },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   dateCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#eceef8', alignItems: 'center', justifyContent: 'center' },

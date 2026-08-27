@@ -169,35 +169,6 @@ export default function FacultyDashboardScreen() {
             </Pressable>
           </View>
 
-          {/* ---- Action Tiles ---- */}
-          <View style={styles.tileRow}>
-            <Pressable
-              style={[styles.tile, { backgroundColor: '#fff8e6' }]}
-              onPress={() => router.push('/(faculty)/review')}
-            >
-              <View style={[styles.tileIcon, { backgroundColor: '#fff0c2' }]}>
-                <MaterialIcons name="fact-check" size={20} color={colors.warning} />
-              </View>
-              <Text style={styles.tileValue}>{dashboard.pendingReview}</Text>
-              <MaterialIcons name="chevron-right" size={18} color={colors.warning} style={styles.tileArrow} />
-              <Text style={styles.tileLabel}>Awaiting review</Text>
-              <Text style={styles.tileSublabel}>Needs your decision</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.tile, { backgroundColor: '#f0f1ff' }]}
-              onPress={() => router.push('/(faculty)/questions')}
-            >
-              <View style={[styles.tileIcon, { backgroundColor: '#e0e3ff' }]}>
-                <MaterialIcons name="help-outline" size={20} color={colors.primary} />
-              </View>
-              <Text style={styles.tileValue}>{dashboard.activeQuestions}</Text>
-              <MaterialIcons name="chevron-right" size={18} color={colors.primary} style={styles.tileArrow} />
-              <Text style={styles.tileLabel}>Active questions</Text>
-              <Text style={styles.tileSublabel}>Require attention</Text>
-            </Pressable>
-          </View>
-
           {/* ---- Student Registrations Card ---- */}
           <View style={styles.card}>
             <View style={styles.cardRow}>
@@ -375,25 +346,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   actionButtonText: { fontSize: 13, color: '#fff', fontWeight: '700' },
-  tileRow: { flexDirection: 'row', gap: 12 },
-  tile: {
-    flex: 1,
-    borderRadius: 16,
-    padding: 16,
-    minHeight: 120,
-  },
-  tileIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  tileValue: { fontSize: 28, fontWeight: '800', color: colors.text, fontVariant: ['tabular-nums'] },
-  tileArrow: { position: 'absolute', top: 16, right: 16 },
-  tileLabel: { fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 4 },
-  tileSublabel: { fontSize: 11, color: colors.textMuted, marginTop: 1 },
   signOutButton: {
     flexDirection: 'row',
     alignItems: 'center',

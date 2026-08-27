@@ -137,7 +137,7 @@ export default function ReviewDetailScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.headerTitle}>{submission.student?.name ?? 'Student'}</Text>
             <Text style={styles.headerSubtitle}>
-              {submission.student?.registerNumber ?? ''} \u00b7 {formatDate(submission.submissionDate)}
+              {submission.student?.registerNumber ?? ''} {'\u00b7'} {formatDate(submission.submissionDate)}
             </Text>
           </View>
           <StatusPill status={submission.status} />
