@@ -44,6 +44,122 @@ export const CLIENT_PLATFORMS = ['ios', 'android', 'web'] as const;
 export type ClientPlatform = (typeof CLIENT_PLATFORMS)[number];
 
 // ---------------------------------------------------------------------------
+// Working days
+// ---------------------------------------------------------------------------
+
+/**
+ * The weekdays a student is expected to answer on, chosen per student at registration.
+ *
+ * Numbered to match `Date.prototype.getUTCDay`: 0 is Sunday through 6 is Saturday.
+ * Using the platform's own numbering rather than a prettier Monday-first scheme means
+ * `dayOfWeek(date)` can be compared against these directly, with no offset arithmetic
+ * anywhere — and an off-by-one in that arithmetic would silently misattribute a whole
+ * category of days.
+ *
+ * This exists because attendance is measured against internship days, and a student
+ * cannot be marked absent for a Sunday their institution never expected them to work.
+ * Which days those are varies by institution and by placement, so it is stored per
+ * student instead of hard-coded.
+ */
+export const WORKING_DAYS = [0, 1, 2, 3, 4, 5, 6] as const;
+export type WorkingDay = (typeof WORKING_DAYS)[number];
+
+/** Full names, for prose. Indexed by day number. */
+export const WORKING_DAY_LABELS: Record<WorkingDay, string> = {
+  0: 'Sunday',
+  1: 'Monday',
+  2: 'Tuesday',
+  3: 'Wednesday',
+  4: 'Thursday',
+  5: 'Friday',
+  6: 'Saturday',
+};
+
+/** Three-letter names, for the registration picker and dense summaries. */
+export const WORKING_DAY_SHORT_LABELS: Record<WorkingDay, string> = {
+  0: 'Sun',
+  1: 'Mon',
+  2: 'Tue',
+  3: 'Wed',
+  4: 'Thu',
+  5: 'Fri',
+  6: 'Sat',
+};
+
+/**
+ * Picker order: Monday first, Sunday last.
+ *
+ * Deliberately separate from `WORKING_DAYS`, whose order is fixed by the platform's
+ * day numbering. A week that reads Sun-first in the UI is the kind of small wrongness
+ * students notice, and reordering the numeric constant to fix it would break the
+ * direct comparison that numbering exists for.
+ */
+export const WORKING_DAY_PICKER_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
+
+/**
+ * Monday to Friday.
+ *
+ * Applied to students registered before working days were configurable, and offered
+ * as the pre-selected default at registration. It is the most common pattern rather
+ * than a universal one — an institution running six-day weeks changes it per student
+ * at registration, or in bulk.
+ */
+export const DEFAULT_WORKING_DAYS: readonly WorkingDay[] = [1, 2, 3, 4, 5];
+
+/** Whether `value` is a valid day number. Narrows for callers reading stored data. */
+export function isWorkingDayNumber(value: number): value is WorkingDay {
+  return Number.isInteger(value) && value >= 0 && value <= 6;
+}
+
+/**
+ * `[1,2,3,4,5]` → `Mon-Fri`; `[1,3,5]` → `Mon, Wed, Fri`.
+ *
+ * Consecutive runs are collapsed into ranges because the common cases (Mon-Fri,
+ * Mon-Sat) are the ones students read most often, and "Mon, Tue, Wed, Thu, Fri, Sat"
+ * is noise where "Mon-Sat" is a fact.
+ */
+export function describeWorkingDays(days: readonly number[]): string {
+  const valid = [...new Set(days)].filter(isWorkingDayNumber);
+  if (valid.length === 0) return 'No working days set';
+  if (valid.length === 7) return 'Every day';
+
+  // Ordered Monday-first so a Mon-Fri week reads as one run rather than being split
+  // by Sunday sitting at position 0.
+  const ordered = WORKING_DAY_PICKER_ORDER.filter((day) => valid.includes(day));
+
+  const runs: WorkingDay[][] = [];
+  for (const day of ordered) {
+    const currentRun = runs[runs.length - 1];
+    const previous = currentRun?.[currentRun.length - 1];
+
+    // A run continues only along the picker order, so Sat→Sun does not merge.
+    if (
+      currentRun &&
+      previous !== undefined &&
+      WORKING_DAY_PICKER_ORDER.indexOf(day) === WORKING_DAY_PICKER_ORDER.indexOf(previous) + 1
+    ) {
+      currentRun.push(day);
+    } else {
+      runs.push([day]);
+    }
+  }
+
+  return runs
+    .map((run) => {
+      const first = run[0];
+      const last = run[run.length - 1];
+      if (first === undefined || last === undefined) return '';
+      // A two-day run reads better listed than hyphenated: "Mon, Tue" not "Mon-Tue".
+      if (run.length <= 2) {
+        return run.map((day) => WORKING_DAY_SHORT_LABELS[day]).join(', ');
+      }
+      return `${WORKING_DAY_SHORT_LABELS[first]}\u2013${WORKING_DAY_SHORT_LABELS[last]}`;
+    })
+    .filter((part) => part.length > 0)
+    .join(', ');
+}
+
+// ---------------------------------------------------------------------------
 // Submissions
 // ---------------------------------------------------------------------------
 
@@ -199,5 +315,9 @@ export const AUDIT_ACTIONS = [
   'user_role_changed',
   'user_status_changed',
   'settings_changed',
+  // Reopening a closed day changes attendance, so each step is recorded.
+  'retake_granted',
+  'retake_revoked',
+  'retake_used',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

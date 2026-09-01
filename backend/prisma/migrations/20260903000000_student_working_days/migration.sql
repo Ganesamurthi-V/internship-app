@@ -1,0 +1,33 @@
+-- Working days per student.
+--
+-- WHY THIS COLUMN EXISTS
+--
+-- Attendance is measured against internship days, and until now every calendar day
+-- counted. That marked students absent for Sundays their placement never expected them
+-- to work. Which days count varies by placement, so it is recorded per student and
+-- asked for at registration.
+--
+-- SAFE ON A LIVE TABLE
+--
+-- Purely additive: one new column on `students`, no existing column altered, no row
+-- deleted or rewritten. `ADD COLUMN ... DEFAULT` backfills existing rows in place on
+-- PostgreSQL 11 and later without a full table rewrite, so this does not lock the table
+-- for a meaningful length of time.
+--
+-- Every student already in the table becomes Monday-to-Friday. That is the common case,
+-- not a universal one: if your institution runs six-day weeks, follow this with
+--
+--   UPDATE "students" SET "working_days" = ARRAY[1,2,3,4,5,6]::INTEGER[];
+--
+-- Day numbering is 0 = Sunday through 6 = Saturday, matching JavaScript's
+-- `Date.prototype.getUTCDay`, so the application compares against it with no offset
+-- arithmetic. Changing the numbering here without changing `WORKING_DAYS` in
+-- `packages/shared-types/src/enums.ts` would silently shift every student's week.
+--
+-- No NOT NULL constraint, deliberately: this matches exactly what Prisma generates for
+-- a scalar list field, so `prisma migrate` will not later report the column as drifted.
+-- Prisma reads a NULL array as an empty list, and the application treats an empty
+-- working week as "fall back to Monday-to-Friday" rather than "no days count".
+
+ALTER TABLE "students"
+  ADD COLUMN IF NOT EXISTS "working_days" INTEGER[] DEFAULT ARRAY[1, 2, 3, 4, 5]::INTEGER[];

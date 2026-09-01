@@ -13,8 +13,9 @@ import { today, toDateColumn } from '@/lib/clock';
 import { notFound } from '@/lib/errors';
 import { serializeStudent, serializeSubmission } from '@/lib/serialize';
 import type { AuthContext } from '@/lib/auth/context';
-import { studentScopeFilter } from '@/lib/auth/guards';
+import { questionScopeFilter, studentScopeFilter } from '@/lib/auth/guards';
 import { getAttendanceSummary } from '@/server/submissions/submissionService';
+import { listActiveRetakesForStudent } from '@/server/retakes/retakeService';
 
 /**
  * The student's home screen: whether today is done, the running totals, and a
@@ -34,6 +35,7 @@ export async function getStudentDashboard(studentId: string): Promise<StudentDas
       section: true,
       studentEmail: true,
       mobile: true,
+      workingDays: true,
       createdAt: true,
       updatedAt: true,
       department: { select: { id: true, name: true, institution: true, createdAt: true } },
@@ -45,7 +47,7 @@ export async function getStudentDashboard(studentId: string): Promise<StudentDas
   const currentDate = today();
   const dateColumn = toDateColumn(currentDate);
 
-  const [todaySubmission, questionCount, summary, recent] = await Promise.all([
+  const [todaySubmission, questionCount, summary, recent, retakes] = await Promise.all([
     prisma.dailySubmission.findUnique({
       where: { studentId_submissionDate: { studentId, submissionDate: dateColumn } },
       select: { status: true },
@@ -79,6 +81,11 @@ export async function getStudentDashboard(studentId: string): Promise<StudentDas
         updatedAt: true,
       },
     }),
+
+    // On the dashboard rather than behind its own call: a grant the student never
+    // notices is a grant that expires unused, and the whole point of it is to
+    // recover attendance before the deadline.
+    listActiveRetakesForStudent(studentId, currentDate),
   ]);
 
   return {
@@ -91,6 +98,7 @@ export async function getStudentDashboard(studentId: string): Promise<StudentDas
     },
     summary,
     recentSubmissions: recent.map(serializeSubmission),
+    retakes,
   };
 }
 
@@ -102,14 +110,33 @@ export async function getStudentDashboard(studentId: string): Promise<StudentDas
  * submissions alone.
  */
 export async function getFacultyDashboard(auth: AuthContext): Promise<FacultyDashboard> {
+  /**
+   * The caller's scope, with no account-status filter. This is the cohort behind
+   * `totalStudents` and `pendingStudents`, so the header reflects everyone who has
+   * registered — a pending registration must be visible, not counted as zero students.
+   */
   const scope = studentScopeFilter(auth) as Prisma.StudentWhereInput;
+
+  /**
+   * The active subset, which is what the daily counters measure against.
+   *
+   * Registration creates the Student row before approval, so a pending student cannot
+   * sign in or submit. Counting them into "missing today" would report a backlog for
+   * people who are not able to answer yet, and would let `submittedToday` be smaller
+   * than a total that includes accounts nobody can use.
+   */
+  const activeScope: Prisma.StudentWhereInput = {
+    AND: [scope, { user: { status: 'active' } }],
+  };
   const currentDate = today();
   const dateColumn = toDateColumn(currentDate);
 
-  const submissionScope: Prisma.DailySubmissionWhereInput = { student: scope };
+  const submissionScope: Prisma.DailySubmissionWhereInput = { student: activeScope };
 
   const [
     totalStudents,
+    activeStudents,
+    pendingStudents,
     pendingReview,
     submittedToday,
     approvedToday,
@@ -117,6 +144,12 @@ export async function getFacultyDashboard(auth: AuthContext): Promise<FacultyDas
     activeQuestions,
   ] = await Promise.all([
     prisma.student.count({ where: scope }),
+
+    prisma.student.count({ where: activeScope }),
+
+    prisma.student.count({
+      where: { AND: [scope, { user: { status: 'pending' } }] },
+    }),
 
     prisma.dailySubmission.count({
       where: { AND: [submissionScope, { status: 'pending' }] },
@@ -134,13 +167,13 @@ export async function getFacultyDashboard(auth: AuthContext): Promise<FacultyDas
       where: { AND: [submissionScope, { submissionDate: dateColumn }, { status: 'declined' }] },
     }),
 
+    // Scoped through questionScopeFilter rather than a local OR on auth.departmentId.
+    // An admin's departmentId is normally null, and the local version therefore
+    // counted only global questions — reporting zero on an institution that has
+    // nothing but department-scoped ones.
     prisma.question.count({
       where: {
-        isActive: true,
-        OR: [
-          { departmentId: null },
-          ...(auth.departmentId ? [{ departmentId: auth.departmentId }] : []),
-        ],
+        AND: [{ isActive: true }, questionScopeFilter(auth) as Prisma.QuestionWhereInput],
       },
     }),
   ]);
@@ -148,11 +181,14 @@ export async function getFacultyDashboard(auth: AuthContext): Promise<FacultyDas
   return {
     pendingReview,
     submittedToday,
-    // Cannot go negative: every submission counted above belongs to a student in scope.
-    missingToday: Math.max(0, totalStudents - submittedToday),
+    // Measured against the active cohort, not the total: a pending student cannot
+    // submit, so counting them here would inflate the backlog. Cannot go negative —
+    // every submission counted above belongs to an active student in scope.
+    missingToday: Math.max(0, activeStudents - submittedToday),
     approvedToday,
     declinedToday,
     totalStudents,
+    pendingStudents,
     activeQuestions,
   };
 }

@@ -10,6 +10,7 @@
 import type { Prisma } from '@prisma/client';
 import type { Pagination, Student, StudentListItem, SubmissionStatus } from '@ims/shared-types';
 import type { StudentListQueryInput, UpdateStudentProfileInput } from '@ims/shared-validation';
+import { emptyAttendanceSummary } from '@ims/shared-validation';
 import { prisma } from '@/lib/prisma';
 import { today, toDateColumn } from '@/lib/clock';
 import { notFound } from '@/lib/errors';
@@ -30,6 +31,10 @@ const studentSelect = {
   section: true,
   studentEmail: true,
   mobile: true,
+  // Selected even though the other internship fields are not, because attendance is
+  // measured against it and every screen showing a percentage also explains the week
+  // it was measured over.
+  workingDays: true,
   createdAt: true,
   updatedAt: true,
   department: { select: { id: true, name: true, institution: true, createdAt: true } },
@@ -70,6 +75,13 @@ export async function listStudents(
                 // than relying on a case-insensitive scan.
                 { registerNumber: { contains: query.search.toUpperCase() } },
                 { name: { contains: query.search, mode: 'insensitive' as const } },
+                // Department is matched by name because that is what the reviewer
+                // sees on the row; departmentId stays available as an exact filter.
+                {
+                  department: {
+                    name: { contains: query.search, mode: 'insensitive' as const },
+                  },
+                },
               ],
             },
           ]
@@ -123,15 +135,9 @@ export async function listStudents(
       section: row.section,
       submittedToday: todayEntry !== undefined,
       todayStatus: (todayEntry?.status as SubmissionStatus | undefined) ?? null,
-      summary: summaries.get(row.id) ?? {
-        daysApproved: 0,
-        daysPending: 0,
-        daysDeclined: 0,
-        daysSubmitted: 0,
-        approvalPercentage: null,
-        firstSubmissionDate: null,
-        lastSubmissionDate: null,
-      },
+      // Uses the shared helper rather than an inline literal so a new field on
+      // AttendanceSummary cannot be forgotten here.
+      summary: summaries.get(row.id) ?? emptyAttendanceSummary(),
     };
   });
 
@@ -167,6 +173,12 @@ export async function updateStudentProfile(
       ...(input.mobile !== undefined && input.mobile !== null ? { mobile: input.mobile } : {}),
       ...(input.departmentId !== undefined ? { departmentId: input.departmentId } : {}),
       ...(input.studentEmail !== undefined ? { studentEmail: input.studentEmail } : {}),
+      // Included because the schema accepts it: a field that validates and is then
+      // dropped is worse than one that is rejected, since the caller is told it worked.
+      // Changing this retroactively re-scores the student's whole attendance history,
+      // which is intended — a placement that was always six days should be measured
+      // that way — and is why the audit entry below records the change.
+      ...(input.workingDays !== undefined ? { workingDays: input.workingDays } : {}),
     },
     select: studentSelect,
   });

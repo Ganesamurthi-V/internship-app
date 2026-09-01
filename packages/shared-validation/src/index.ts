@@ -11,4 +11,5 @@ export * from './auth';
 export * from './student';
 export * from './question';
 export * from './submission';
+export * from './retake';
 export * from './document';

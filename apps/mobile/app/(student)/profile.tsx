@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useMyProfile } from '@/lib/api/hooks';
 import { useAuthStore } from '@/stores/authStore';
+import { PROGRAMME_LABEL } from '@/constants/academics';
 import { colors, fontSize, shadow, spacing } from '@/constants/theme';
 
 export default function ProfileScreen() {
@@ -64,7 +65,7 @@ export default function ProfileScreen() {
             <Text style={styles.muted}>Loading...</Text>
           ) : student ? (
             <View style={styles.detailsGrid}>
-              <DetailRow icon="school" label="Programme" value={student.programme} />
+              <DetailRow icon="school" label="Programme" value={PROGRAMME_LABEL} />
               <DetailRow icon="business" label="Department" value={student.department?.name ?? '\u2014'} />
               <DetailRow icon="calendar-today" label="Year" value={student.year !== null ? String(student.year) : '\u2014'} />
               <DetailRow icon="groups" label="Section" value={student.section ?? '\u2014'} />

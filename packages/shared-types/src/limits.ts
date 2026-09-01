@@ -124,3 +124,28 @@ export const SUBMISSION_BACKDATE_DAYS = 0;
  * `pending` one.
  */
 export const ALLOW_EDIT_WHILE_PENDING = true;
+
+// ---------------------------------------------------------------------------
+// Retakes
+// ---------------------------------------------------------------------------
+
+/**
+ * How long a faculty-granted retake stays usable when no deadline is chosen.
+ *
+ * A grant needs an end date. Without one, a day that closed at midnight would stay
+ * writable indefinitely, which removes the deadline the whole attendance rule rests
+ * on. A week is long enough to cover the reason the student missed the day
+ * (illness, network, travel) without turning "answer on the day" into a suggestion.
+ */
+export const RETAKE_DEFAULT_WINDOW_DAYS = 7;
+
+/** Bound on the deadline a reviewer may set, counted from the day of the grant. */
+export const RETAKE_MAX_WINDOW_DAYS = 30;
+
+/**
+ * The retake reason is shown to the student and is the justification on the record,
+ * so it is required — the same reasoning that makes a decline note required. An
+ * unexplained reopened day is an attendance change nobody can account for later.
+ */
+export const RETAKE_REASON_MIN_LENGTH = 5;
+export const RETAKE_REASON_MAX_LENGTH = 300;

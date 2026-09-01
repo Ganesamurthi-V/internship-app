@@ -28,6 +28,7 @@ import type {
   SubmissionStatus,
   SubmissionStudentSummary,
 } from '@ims/shared-types';
+import { DEFAULT_WORKING_DAYS } from '@ims/shared-types';
 
 // ---------------------------------------------------------------------------
 // Primitive converters
@@ -128,6 +129,7 @@ type StudentRow = {
   endDate?: Date | null;
   durationDays?: number | null;
   workingHoursPerDay?: number | null;
+  workingDays?: number[] | null;
   mentorName?: string | null;
   mentorDesignation?: string | null;
   mentorContact?: string | null;
@@ -161,6 +163,12 @@ export function serializeStudent(
     endDate: row.endDate ? toDateOnly(row.endDate) : null,
     durationDays: row.durationDays ?? null,
     workingHoursPerDay: row.workingHoursPerDay ?? null,
+    // Never an empty array: a student with nothing stored reads as the common working
+    // week, matching how the attendance calculation treats the same case.
+    workingDays:
+      row.workingDays && row.workingDays.length > 0
+        ? row.workingDays
+        : [...DEFAULT_WORKING_DAYS],
     mentorName: row.mentorName ?? null,
     mentorDesignation: row.mentorDesignation ?? null,
     mentorContact: row.mentorContact ?? null,

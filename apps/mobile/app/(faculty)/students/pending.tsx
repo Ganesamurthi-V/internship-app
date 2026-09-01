@@ -13,6 +13,7 @@ import { TextField } from '@/components/ui/TextField';
 import { DocumentViewer } from '@/components/ui/DocumentViewer';
 import { api, ApiError } from '@/lib/api/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { PROGRAMME_LABEL } from '@/constants/academics';
 import { colors, fontSize, shadow, spacing } from '@/constants/theme';
 
 interface PendingStudent {
@@ -148,7 +149,7 @@ export default function PendingStudentsScreen() {
               </View>
 
               <View style={styles.detailsGrid}>
-                <DetailRow icon="school" value={student.departmentName ?? student.programme} />
+                <DetailRow icon="school" value={student.departmentName ?? PROGRAMME_LABEL} />
                 <DetailRow icon="calendar-today" value={`Year ${student.year ?? '-'} / Sec ${student.section ?? '-'}`} />
                 <DetailRow icon="email" value={student.email} />
                 <DetailRow icon="phone" value={student.mobile} />
@@ -279,7 +280,7 @@ function StudentDetailModal({
               <Text style={ds.gradName}>{student.name}</Text>
               <Text style={ds.gradSub}>
                 {student.registerNumber}
-                {(student.departmentName ?? student.programme) ? ` • ${student.departmentName ?? student.programme}` : ''}
+                {student.departmentName ? ` • ${student.departmentName}` : ''}
               </Text>
             </View>
           </View>
@@ -322,7 +323,8 @@ function StudentDetailModal({
             {page === 0 && <>
               <IRow icon="person"            label="Full Name"      value={student.name} />
               <IRow icon="badge"             label="Register Number" value={student.registerNumber} />
-              <IRow icon="account-balance"   label="Department"     value={student.departmentName ?? student.programme} />
+              <IRow icon="account-balance"   label="Department"     value={student.departmentName ?? '—'} />
+              <IRow icon="school"            label="Programme"      value={PROGRAMME_LABEL} />
               <IRow icon="school"            label="Year"           value={student.year ? String(student.year) : '—'} />
               <IRow icon="groups"            label="Section"        value={student.section ?? '—'} />
               <IRow icon="email"             label="Email"          value={student.email} />

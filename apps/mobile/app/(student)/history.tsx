@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import Svg, { Circle } from 'react-native-svg';
 import type { SubmissionStatus, StudentDashboard as StudentDashboardData } from '@ims/shared-types';
-import { SUBMISSION_STATUSES } from '@ims/shared-types';
+import { SUBMISSION_STATUSES, describeWorkingDays } from '@ims/shared-types';
 import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { ListSkeleton } from '@/components/ui/SkeletonLoader';
@@ -39,6 +39,12 @@ export default function StudentHistoryScreen() {
   const dashboard = dashData?.role === 'student' ? (dashData.dashboard as StudentDashboardData) : null;
   const summary = dashboard?.summary;
 
+  // Coerced once here rather than at each of the six places they are read. These are
+  // always numbers from the API; the fallback covers a response cached by an older build
+  // of the app, where a missing field would otherwise render as an empty cell.
+  const daysMissed = summary?.daysAbsent ?? 0;
+  const internshipDays = summary?.internshipDays ?? 0;
+
   return (
     <View style={styles.container}>
       <LinearGradient
@@ -57,8 +63,11 @@ export default function StudentHistoryScreen() {
         onRefresh={() => void refetch()}
         ListHeaderComponent={
           <View>
-            {/* Attendance Summary Card */}
-            {summary && summary.daysSubmitted > 0 && (
+            {/* Attendance Summary Card.
+                Rendered whenever a summary exists, with no threshold on the number of
+                days. Hiding it until the internship had elapsed days took the ring away
+                on exactly the days a student most wants to see it — the first ones. */}
+            {summary ? (
               <View style={styles.attendanceCard}>
                 <View style={styles.attendanceHeader}>
                   <MaterialIcons name="bar-chart" size={18} color={colors.primary} />
@@ -68,39 +77,67 @@ export default function StudentHistoryScreen() {
                 <View style={styles.attendanceBody}>
                   {/* Progress Ring */}
                   <View style={styles.ringSection}>
-                    <AttendanceRing percentage={summary.approvalPercentage ?? 0} />
+                    <AttendanceRing percentage={summary.attendancePercentage} />
                     <Text style={styles.ringCaption}>
-                      {summary.daysApproved}/{summary.daysSubmitted} days
+                      {daysMissed === 0
+                        ? 'No days missed'
+                        : `${daysMissed} day${daysMissed === 1 ? '' : 's'} missed`}
                     </Text>
                   </View>
 
-                  {/* Stats */}
+                  {/* Stats.
+                      Every value goes through `?? 0` so a count of zero renders as "0"
+                      rather than an empty cell. A blank next to "Absent" reads as
+                      missing data when it actually means nothing was missed. */}
                   <View style={styles.statsSection}>
-                    <StatRow icon="check-circle" label="Approved" value={summary.daysApproved} color={colors.success} />
-                    <StatRow icon="schedule" label="Pending" value={summary.daysPending} color={colors.warning} />
-                    <StatRow icon="cancel" label="Declined" value={summary.daysDeclined} color={colors.danger} />
-                    <StatRow icon="event" label="Total Days" value={summary.daysSubmitted} color={colors.primary} />
+                    <StatRow icon="check-circle" label="Present" value={summary.daysApproved ?? 0} color={colors.success} />
+                    <StatRow icon="cancel" label="Absent" value={daysMissed} color={colors.danger} />
+                    <StatRow icon="schedule" label="Awaiting review" value={summary.daysPending ?? 0} color={colors.warning} />
+                    <StatRow icon="event" label="Internship days" value={internshipDays} color={colors.primary} />
                   </View>
                 </View>
 
-                {/* Visual bar graph */}
+                {/* Recoverable days, only when there are any. A student with an open
+                    retake needs to know the percentage is not final. */}
+                {(summary.daysRecoverable ?? 0) > 0 ? (
+                  <View style={styles.recoverBox}>
+                    <MaterialIcons name="event-available" size={16} color={colors.primary} />
+                    <Text style={styles.recoverText}>
+                      {summary.daysRecoverable} of these day
+                      {summary.daysRecoverable === 1 ? ' has' : 's have'} a retake open.
+                      Answer {summary.daysRecoverable === 1 ? 'it' : 'them'} to get the
+                      attendance back.
+                    </Text>
+                  </View>
+                ) : null}
+
+                {/* Visual bar graph — measured against the internship length, so the
+                    bars show how much of the whole internship each outcome accounts for. */}
                 <View style={styles.graphSection}>
                   <Text style={styles.graphTitle}>Breakdown</Text>
                   <View style={styles.barRow}>
                     <View style={styles.barLabelCol}>
-                      <Text style={styles.barLabel}>Approved</Text>
-                      <Text style={styles.barLabel}>Pending</Text>
+                      <Text style={styles.barLabel}>Present</Text>
+                      <Text style={styles.barLabel}>Absent</Text>
+                      <Text style={styles.barLabel}>Awaiting</Text>
                       <Text style={styles.barLabel}>Declined</Text>
                     </View>
                     <View style={styles.barCol}>
-                      <BarItem value={summary.daysApproved} max={summary.daysSubmitted} color={colors.success} />
-                      <BarItem value={summary.daysPending} max={summary.daysSubmitted} color={colors.warning} />
-                      <BarItem value={summary.daysDeclined} max={summary.daysSubmitted} color={colors.danger} />
+                      <BarItem value={summary.daysApproved ?? 0} max={internshipDays} color={colors.success} />
+                      <BarItem value={daysMissed} max={internshipDays} color={colors.danger} />
+                      <BarItem value={summary.daysPending ?? 0} max={internshipDays} color={colors.warning} />
+                      <BarItem value={summary.daysDeclined ?? 0} max={internshipDays} color={colors.textMuted} />
                     </View>
                   </View>
                 </View>
+
+                <Text style={styles.attendanceNote}>
+                  {internshipDays > 0
+                    ? `You start at 100% and lose a day's worth only when a day closes without an approved answer. Counted on ${describeWorkingDays(summary.workingDays ?? [])}. A day awaiting review does not count against you.`
+                    : 'Your attendance appears here once your internship start date is recorded.'}
+                </Text>
               </View>
-            )}
+            ) : null}
 
             {/* Filters */}
             <View style={styles.filterRow}>
@@ -180,24 +217,50 @@ export default function StudentHistoryScreen() {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function AttendanceRing({ percentage }: { percentage: number }) {
+/**
+ * The attendance ring.
+ *
+ * `percentage` is nullable because the API reports null when the internship has no
+ * measurable length yet. The ring still renders in that case, empty and showing a dash:
+ * drawing a full circle for "unknown" would claim 100%, and hiding the ring entirely is
+ * what made it look like the graph had been removed.
+ */
+function AttendanceRing({ percentage }: { percentage: number | null }) {
   const size = 110;
   const strokeWidth = 10;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
-  const clamped = Math.max(0, Math.min(100, percentage));
+
+  const known = percentage !== null;
+  const clamped = Math.max(0, Math.min(100, percentage ?? 0));
   const offset = circumference - (clamped / 100) * circumference;
-  const colour = clamped >= 85 ? colors.success : clamped >= 75 ? colors.warning : colors.danger;
+  const colour = !known
+    ? colors.textFaint
+    : clamped >= 85
+      ? colors.success
+      : clamped >= 75
+        ? colors.warning
+        : colors.danger;
 
   return (
-    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+    <View
+      style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}
+      accessibilityRole="image"
+      accessibilityLabel={
+        known ? `Attendance ${Math.round(clamped)} percent` : 'Attendance not available yet'
+      }
+    >
       <Svg width={size} height={size}>
         <Circle cx={size / 2} cy={size / 2} r={radius} stroke={colors.surfaceAlt} strokeWidth={strokeWidth} fill="none" />
-        <Circle cx={size / 2} cy={size / 2} r={radius} stroke={colour} strokeWidth={strokeWidth} fill="none"
-          strokeDasharray={`${circumference}`} strokeDashoffset={offset} strokeLinecap="round"
-          rotation={-90} origin={`${size / 2}, ${size / 2}`} />
+        {known ? (
+          <Circle cx={size / 2} cy={size / 2} r={radius} stroke={colour} strokeWidth={strokeWidth} fill="none"
+            strokeDasharray={`${circumference}`} strokeDashoffset={offset} strokeLinecap="round"
+            rotation={-90} origin={`${size / 2}, ${size / 2}`} />
+        ) : null}
       </Svg>
-      <Text style={{ position: 'absolute', fontSize: 20, fontWeight: '800', color: colour }}>{Math.round(clamped)}%</Text>
+      <Text style={{ position: 'absolute', fontSize: 20, fontWeight: '800', color: colour }}>
+        {known ? `${Math.round(clamped)}%` : '\u2014'}
+      </Text>
     </View>
   );
 }
@@ -242,6 +305,7 @@ const styles = StyleSheet.create({
   attendanceCard: { backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 14, ...shadow.card },
   attendanceHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
   attendanceTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+  attendanceNote: { fontSize: 11, color: colors.textMuted, marginTop: 14, lineHeight: 15 },
   attendanceBody: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   ringSection: { alignItems: 'center' },
   ringCaption: { fontSize: 10, color: colors.textMuted, marginTop: 4 },
@@ -249,6 +313,18 @@ const styles = StyleSheet.create({
   statRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   statLabel: { flex: 1, fontSize: 13, color: colors.textMuted },
   statValue: { fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'] },
+
+  // Recoverable days
+  recoverBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: colors.infoBg,
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 14,
+  },
+  recoverText: { flex: 1, fontSize: 11, color: colors.text, lineHeight: 16 },
 
   // Bar graph
   graphSection: { marginTop: 16, paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border },

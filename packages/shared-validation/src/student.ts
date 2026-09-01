@@ -13,6 +13,29 @@ const nameSchema = z
   .max(120, { message: 'Name is too long.' });
 
 /**
+ * The weekdays a student is expected to answer on, 0 = Sunday.
+ *
+ * At least one day is required. An empty working week would make the attendance
+ * denominator zero and the percentage unmeasurable, which is a worse outcome than
+ * refusing the input — so it is refused here rather than defaulted silently.
+ *
+ * Duplicates are collapsed and the result is sorted, so `[5,1,1]` and `[1,5]` store
+ * identically. Without that, two students with the same working week could hold
+ * different arrays and any comparison between them would be unreliable.
+ */
+export const workingDaysSchema = z
+  .array(
+    z.coerce
+      .number()
+      .int({ message: 'Working days must be whole numbers.' })
+      .min(0, { message: 'Working day must be between 0 (Sunday) and 6 (Saturday).' })
+      .max(6, { message: 'Working day must be between 0 (Sunday) and 6 (Saturday).' }),
+  )
+  .min(1, { message: 'Choose at least one working day.' })
+  .max(7, { message: 'There are only seven days in a week.' })
+  .transform((days) => [...new Set(days)].sort((a, b) => a - b));
+
+/**
  * The register number is the master key for a student record, so it is normalised
  * to uppercase. Without that, `21cs101` and `21CS101` become two students and the
  * unique constraint does not save you.
@@ -42,6 +65,8 @@ export const createStudentSchema = z.object({
   section: z.string().trim().max(8).nullable().optional(),
   studentEmail: emailSchema,
   mobile: mobileSchema.nullable().optional(),
+  /** Omitted leaves the column default (Mon-Fri) in place. */
+  workingDays: workingDaysSchema.optional(),
 });
 export type CreateStudentInput = z.output<typeof createStudentSchema>;
 

@@ -11,6 +11,8 @@ import type { StudentDashboard as StudentDashboardData } from '@ims/shared-types
 import { StudentDashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import { useDashboard } from '@/lib/api/hooks';
 import { useAuthStore } from '@/stores/authStore';
+import { describeWorkingDays } from '@ims/shared-types';
+import { describeDaysUntil, formatLongDate, formatShortDate } from '@/lib/utils/dates';
 import { colors, fontSize, radius, shadow, spacing } from '@/constants/theme';
 
 export default function StudentDashboardScreen() {
@@ -134,6 +136,48 @@ export default function StudentDashboardScreen() {
             )}
           </View>
 
+          {/* ---- Retake cards ----
+              Directly under today's card, because a retake is time-boxed and a grant
+              the student never notices is a grant that expires unused. Each one is its
+              own tappable card rather than a single summary line: the student has to
+              answer a specific day, so the day and its deadline have to be visible
+              without opening anything. */}
+          {dashboard.retakes.map((retake) => (
+            <Pressable
+              key={retake.id}
+              style={styles.retakeCard}
+              onPress={() =>
+                router.push({
+                  pathname: '/(student)/answer',
+                  params: { date: retake.targetDate },
+                })
+              }
+              accessibilityRole="button"
+              accessibilityLabel={`Answer the retake for ${formatLongDate(retake.targetDate)}`}
+            >
+              <View style={styles.retakeIcon}>
+                <MaterialIcons name="event-available" size={22} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.retakeTitle}>
+                  Retake for {formatShortDate(retake.targetDate)}
+                </Text>
+                <Text style={styles.retakeSubtitle}>
+                  Answer by {formatShortDate(retake.expiresOn)} (
+                  {describeDaysUntil(retake.expiresOn, today.date)}) and this day counts
+                  as present once approved.
+                </Text>
+                {retake.reason ? (
+                  <Text style={styles.retakeReason} numberOfLines={2}>
+                    {retake.grantedByName ? `${retake.grantedByName}: ` : ''}
+                    {retake.reason}
+                  </Text>
+                ) : null}
+              </View>
+              <MaterialIcons name="chevron-right" size={20} color={colors.primary} />
+            </Pressable>
+          ))}
+
           {/* ---- Attendance Summary Card ---- */}
           <View style={styles.card}>
             <View style={styles.cardHeaderRow}>
@@ -150,39 +194,60 @@ export default function StudentDashboardScreen() {
               </Pressable>
             </View>
 
-            {summary.daysSubmitted === 0 ? (
-              <Text style={styles.cardSubtitle}>Nothing yet. Your first submission will show up here.</Text>
+            {summary.internshipDays === 0 ? (
+              <Text style={styles.cardSubtitle}>
+                Your attendance appears here once your internship start date is recorded.
+              </Text>
             ) : (
-              <View style={styles.statsGrid}>
-                <StatCircle
-                  icon="check-circle"
-                  label="Approved"
-                  value={summary.daysApproved}
-                  color={colors.success}
-                  bgColor={colors.successBg}
-                />
-                <StatCircle
-                  icon="schedule"
-                  label="Pending"
-                  value={summary.daysPending}
-                  color={colors.warning}
-                  bgColor={colors.warningBg}
-                />
-                <StatCircle
-                  icon="cancel"
-                  label="Declined"
-                  value={summary.daysDeclined}
-                  color={colors.danger}
-                  bgColor={colors.dangerBg}
-                />
-                <StatCircle
-                  icon="percent"
-                  label="Approval"
-                  value={`${summary.approvalPercentage ?? 0}%`}
-                  color={colors.primary}
-                  bgColor="#eceef8"
-                />
-              </View>
+              <>
+                {/* Every count goes through `?? 0`, so zero absences render as "0"
+                    rather than as an empty circle that reads like missing data. */}
+                <View style={styles.statsGrid}>
+                  <StatCircle
+                    icon="check-circle"
+                    label="Present"
+                    value={summary.daysApproved ?? 0}
+                    color={colors.success}
+                    bgColor={colors.successBg}
+                  />
+                  <StatCircle
+                    icon="cancel"
+                    label="Absent"
+                    value={summary.daysAbsent ?? 0}
+                    color={colors.danger}
+                    bgColor={colors.dangerBg}
+                  />
+                  <StatCircle
+                    icon="schedule"
+                    label="Awaiting"
+                    value={summary.daysPending ?? 0}
+                    color={colors.warning}
+                    bgColor={colors.warningBg}
+                  />
+                  <StatCircle
+                    icon="percent"
+                    label="Attendance"
+                    value={
+                      summary.attendancePercentage !== null
+                        ? `${summary.attendancePercentage}%`
+                        : '\u2014'
+                    }
+                    color={colors.primary}
+                    bgColor={colors.infoBg}
+                  />
+                </View>
+                {/* The two counter-intuitive parts of the rule, stated plainly: you begin
+                    at 100%, and answering on time protects you even before it is reviewed. */}
+                <Text style={styles.attendanceNote}>
+                  You start at 100% of your {summary.internshipDays} internship days and
+                  only lose ground when a working day closes without an approved answer.
+                  Answering on time protects your attendance even while it waits for
+                  review.
+                  {summary.workingDays && summary.workingDays.length > 0
+                    ? ` Counted on ${describeWorkingDays(summary.workingDays)}.`
+                    : ''}
+                </Text>
+              </>
             )}
           </View>
 
@@ -195,7 +260,7 @@ export default function StudentDashboardScreen() {
               <View style={[styles.tileIcon, { backgroundColor: '#c8e6d5' }]}>
                 <MaterialIcons name="check-circle" size={20} color={colors.success} />
               </View>
-              <Text style={styles.tileValue}>{summary.daysApproved}</Text>
+              <Text style={styles.tileValue}>{summary.daysApproved ?? 0}</Text>
               <MaterialIcons name="chevron-right" size={18} color={colors.success} style={styles.tileArrow} />
               <Text style={styles.tileLabel}>Days approved</Text>
               <Text style={styles.tileSublabel}>Attendance counted</Text>
@@ -380,6 +445,29 @@ const styles = StyleSheet.create({
   },
   cardTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
   cardSubtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2, lineHeight: 18 },
+  attendanceNote: { fontSize: 11, color: colors.textMuted, marginTop: 14, lineHeight: 15 },
+  retakeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.infoBg,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary,
+  },
+  retakeIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retakeTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
+  retakeSubtitle: { fontSize: 12, color: colors.textMuted, marginTop: 2, lineHeight: 17 },
+  retakeReason: { fontSize: 11, color: colors.textMuted, marginTop: 5, fontStyle: 'italic', lineHeight: 15 },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
   linkText: { fontSize: 13, color: colors.primary, fontWeight: '600' },
   statsGrid: {

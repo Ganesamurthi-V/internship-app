@@ -35,6 +35,13 @@ export const queryKeys = {
     detail: (studentId: string) => ['students', studentId] as const,
   },
 
+  retakes: {
+    all: ['retakes'] as const,
+    list: (filters: object) => ['retakes', 'list', filters] as const,
+    /** Candidate days a reviewer could reopen for one student. */
+    missedDays: (studentId: string) => ['retakes', 'missed-days', studentId] as const,
+  },
+
   documents: {
     /** Files uploaded but not yet attached to a submission. */
     unattached: ['documents', 'unattached'] as const,

@@ -18,7 +18,11 @@ import type {
   Pagination,
   TodayForm,
 } from '@ims/shared-types';
-import { ALLOW_EDIT_WHILE_PENDING, SUBMISSION_BACKDATE_DAYS } from '@ims/shared-types';
+import {
+  ALLOW_EDIT_WHILE_PENDING,
+  DEFAULT_WORKING_DAYS,
+  SUBMISSION_BACKDATE_DAYS,
+} from '@ims/shared-types';
 import {
   summariseSubmissions,
   submissionLockReason,
@@ -29,13 +33,14 @@ import {
   type SubmissionListQueryInput,
 } from '@ims/shared-validation';
 import { prisma } from '@/lib/prisma';
-import { today, toDateColumn, dateRangeFilter } from '@/lib/clock';
+import { today, toDateColumn, fromDateColumn, dateRangeFilter } from '@/lib/clock';
 import { conflict, forbidden, notFound, validationError } from '@/lib/errors';
 import { serializeSubmission, serializeSubmissionDetail } from '@/lib/serialize';
 import { recordAudit } from '@/lib/audit';
 import type { AuthContext } from '@/lib/auth/context';
 import { isReviewer, submissionScopeFilter } from '@/lib/auth/guards';
 import { listActiveQuestions } from '@/server/questions/questionService';
+import { getRetakeForDate, markRetakeUsed } from '@/server/retakes/retakeService';
 
 /**
  * Guards the derivation of document ids from file answers. A `file_upload` answer
@@ -130,12 +135,13 @@ export async function getTodayForm(
   });
   if (!student) throw notFound('Student profile not found.');
 
-  const [questions, existing] = await Promise.all([
+  const [questions, existing, retake] = await Promise.all([
     listActiveQuestions(student.departmentId),
     prisma.dailySubmission.findUnique({
       where: { studentId_submissionDate: { studentId, submissionDate: toDateColumn(date) } },
       select: submissionDetailSelect,
     }),
+    getRetakeForDate(studentId, date, currentDate),
   ]);
 
   const lockedReason = submissionLockReason({
@@ -144,6 +150,8 @@ export async function getTodayForm(
     backdateDays: SUBMISSION_BACKDATE_DAYS,
     existingStatus: existing ? (existing.status as DailySubmission['status']) : null,
     allowEditWhilePending: ALLOW_EDIT_WHILE_PENDING,
+    // A faculty grant is the only thing that reopens a closed day.
+    retakeOpen: retake?.isActive ?? false,
   });
 
   return {
@@ -154,6 +162,7 @@ export async function getTodayForm(
     lockedReason:
       lockedReason ??
       (questions.length === 0 ? 'No questions have been set up yet. Check back later.' : null),
+    retake,
   };
 }
 
@@ -185,10 +194,13 @@ export async function submitAnswers(
 
   const dateColumn = toDateColumn(date);
 
-  const existing = await prisma.dailySubmission.findUnique({
-    where: { studentId_submissionDate: { studentId, submissionDate: dateColumn } },
-    select: { id: true, status: true },
-  });
+  const [existing, retake] = await Promise.all([
+    prisma.dailySubmission.findUnique({
+      where: { studentId_submissionDate: { studentId, submissionDate: dateColumn } },
+      select: { id: true, status: true },
+    }),
+    getRetakeForDate(studentId, date, currentDate),
+  ]);
 
   const lockedReason = submissionLockReason({
     date,
@@ -196,6 +208,9 @@ export async function submitAnswers(
     backdateDays: SUBMISSION_BACKDATE_DAYS,
     existingStatus: existing ? (existing.status as DailySubmission['status']) : null,
     allowEditWhilePending: ALLOW_EDIT_WHILE_PENDING,
+    // Re-checked here rather than trusted from the form: the grant could have been
+    // revoked, or expired at midnight, between loading the form and submitting it.
+    retakeOpen: retake?.isActive ?? false,
   });
 
   if (lockedReason) throw conflict(lockedReason);
@@ -338,8 +353,20 @@ export async function submitAnswers(
       answerCount: validation.answers.length,
       documentCount: documentIds.length,
       resubmitted: Boolean(existing),
+      // Marks this row as one that only exists because a closed day was reopened.
+      viaRetake: retake?.isActive ?? false,
     },
   });
+
+  // Stamped after the write, not before: a grant recorded as used against a
+  // submission that failed to save would read as a spent second chance.
+  if (retake?.isActive) {
+    await markRetakeUsed(retake.id, auth, {
+      submissionId: submission.id,
+      date,
+      resubmitted: Boolean(existing),
+    });
+  }
 
   return serializeSubmissionDetail(submission);
 }
@@ -418,18 +445,64 @@ export async function listSubmissionHistory(
   return rows.map(serializeSubmission);
 }
 
-/** The derived attendance figures for one student. */
+/**
+ * A stored working week, or the default when the column holds nothing usable.
+ *
+ * An empty array would make the attendance denominator zero and the percentage
+ * unmeasurable for that student. The column is defaulted and validated on write, so
+ * this should never fire — but degrading to the common working week is a far better
+ * failure than a student whose attendance silently cannot be computed.
+ */
+function resolveWorkingDays(stored: number[] | null | undefined): number[] {
+  if (!stored || stored.length === 0) return [...DEFAULT_WORKING_DAYS];
+  return stored;
+}
+
+/**
+ * The derived attendance figures for one student.
+ *
+ * Three things are loaded alongside the submissions, because none of them can be
+ * inferred from a submission list:
+ *
+ *   - the internship dates, which give the denominator its length,
+ *   - the working days, without which a student is marked absent for Sundays,
+ *   - the open retake grants, so the summary can report how many absent days are
+ *     still recoverable.
+ */
 export async function getAttendanceSummary(studentId: string): Promise<AttendanceSummary> {
-  const rows = await prisma.dailySubmission.findMany({
-    where: { studentId },
-    select: { submissionDate: true, status: true },
-  });
+  const currentDate = today();
+
+  const [student, rows, retakes] = await Promise.all([
+    prisma.student.findUnique({
+      where: { id: studentId },
+      select: { startDate: true, endDate: true, workingDays: true },
+    }),
+    prisma.dailySubmission.findMany({
+      where: { studentId },
+      select: { submissionDate: true, status: true },
+    }),
+    prisma.retakeGrant.findMany({
+      where: {
+        studentId,
+        revokedAt: null,
+        expiresOn: { gte: toDateColumn(currentDate) },
+      },
+      select: { targetDate: true },
+    }),
+  ]);
 
   return summariseSubmissions(
     rows.map((row) => ({
-      submissionDate: row.submissionDate.toISOString().slice(0, 10),
+      submissionDate: fromDateColumn(row.submissionDate),
       status: row.status as DailySubmission['status'],
     })),
+    {
+      startDate: student?.startDate ? fromDateColumn(student.startDate) : null,
+      endDate: student?.endDate ? fromDateColumn(student.endDate) : null,
+      today: currentDate,
+      workingDays: resolveWorkingDays(student?.workingDays),
+      retakeOpenDates: retakes.map((row) => fromDateColumn(row.targetDate)),
+    },
   );
 }
 
@@ -440,23 +513,65 @@ export async function getAttendanceSummaries(
   const result = new Map<string, AttendanceSummary>();
   if (studentIds.length === 0) return result;
 
-  const rows = await prisma.dailySubmission.findMany({
-    where: { studentId: { in: [...studentIds] } },
-    select: { studentId: true, submissionDate: true, status: true },
-  });
+  const ids = [...studentIds];
+  const currentDate = today();
+
+  // Three batched queries rather than three per student: the internship windows, the
+  // submissions and the open retakes, then joined in memory.
+  const [students, rows, retakes] = await Promise.all([
+    prisma.student.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, startDate: true, endDate: true, workingDays: true },
+    }),
+    prisma.dailySubmission.findMany({
+      where: { studentId: { in: ids } },
+      select: { studentId: true, submissionDate: true, status: true },
+    }),
+    prisma.retakeGrant.findMany({
+      where: {
+        studentId: { in: ids },
+        revokedAt: null,
+        expiresOn: { gte: toDateColumn(currentDate) },
+      },
+      select: { studentId: true, targetDate: true },
+    }),
+  ]);
+
+  const retakesByStudent = new Map<string, string[]>();
+  for (const row of retakes) {
+    const list = retakesByStudent.get(row.studentId) ?? [];
+    list.push(fromDateColumn(row.targetDate));
+    retakesByStudent.set(row.studentId, list);
+  }
+
+  const windowByStudent = new Map(
+    students.map((student) => [
+      student.id,
+      {
+        startDate: student.startDate ? fromDateColumn(student.startDate) : null,
+        endDate: student.endDate ? fromDateColumn(student.endDate) : null,
+        today: currentDate,
+        workingDays: resolveWorkingDays(student.workingDays),
+        retakeOpenDates: retakesByStudent.get(student.id) ?? [],
+      },
+    ]),
+  );
 
   const grouped = new Map<string, { submissionDate: string; status: DailySubmission['status'] }[]>();
   for (const row of rows) {
     const list = grouped.get(row.studentId) ?? [];
     list.push({
-      submissionDate: row.submissionDate.toISOString().slice(0, 10),
+      submissionDate: fromDateColumn(row.submissionDate),
       status: row.status as DailySubmission['status'],
     });
     grouped.set(row.studentId, list);
   }
 
-  for (const studentId of studentIds) {
-    result.set(studentId, summariseSubmissions(grouped.get(studentId) ?? []));
+  for (const studentId of ids) {
+    result.set(
+      studentId,
+      summariseSubmissions(grouped.get(studentId) ?? [], windowByStudent.get(studentId)),
+    );
   }
 
   return result;

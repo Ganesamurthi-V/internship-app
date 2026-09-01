@@ -75,9 +75,6 @@ export default function FacultyDashboardScreen() {
                 </Text>
               </View>
             </View>
-            <Pressable style={styles.settingsButton} accessibilityLabel="Settings">
-              <MaterialIcons name="settings" size={24} color="#ffffff" />
-            </Pressable>
           </View>
         </LinearGradient>
 
@@ -169,27 +166,8 @@ export default function FacultyDashboardScreen() {
             </Pressable>
           </View>
 
-          {/* ---- Student Registrations Card ---- */}
-          <View style={styles.card}>
-            <View style={styles.cardRow}>
-              <View style={[styles.iconCircle, { backgroundColor: '#eceef8' }]}>
-                <MaterialIcons name="person-add" size={24} color={colors.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>Student Registrations</Text>
-                <Text style={styles.cardSubtitle}>
-                  New students need your approval before they{'\n'}can log in and start submitting.
-                </Text>
-              </View>
-            </View>
-            <Pressable
-              style={styles.outlineButton}
-              onPress={() => router.push('/(faculty)/students/pending')}
-            >
-              <Text style={styles.outlineButtonText}>View pending approvals</Text>
-              <MaterialIcons name="chevron-right" size={18} color={colors.textMuted} />
-            </Pressable>
-          </View>
+          {/* Registrations are reached from the Students tab, which is where the pending
+              screen lives as a sibling route. */}
 
           {/* ---- Account Card ---- */}
           <View style={styles.card}>
@@ -268,15 +246,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   scopeText: { fontSize: 12, color: '#ffffffcc' },
-  settingsButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#ffffff20',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 4,
-  },
   content: { padding: 16, gap: 14 },
   card: {
     backgroundColor: '#fff',

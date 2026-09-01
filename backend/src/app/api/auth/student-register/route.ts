@@ -188,6 +188,9 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
           endDate,
           durationDays: input.durationDays ?? null,
           workingHoursPerDay: input.workingHoursPerDay ?? null,
+          // Omitted by an older build of the app, in which case the column default
+          // (Mon-Fri) applies rather than an empty working week.
+          ...(input.workingDays ? { workingDays: input.workingDays } : {}),
           mentorName: input.mentorName ?? null,
           mentorDesignation: input.mentorDesignation ?? null,
           mentorContact: input.mentorContact ?? null,

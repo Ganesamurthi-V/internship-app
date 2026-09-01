@@ -67,7 +67,7 @@ export function requireStudentId(auth: AuthContext): string {
 /** How the caller relates to the record in question. */
 export type Relation = 'owner' | 'scoped_faculty' | 'admin' | 'none';
 
-export type ResourceKind = 'submission' | 'question' | 'student' | 'document';
+export type ResourceKind = 'submission' | 'question' | 'student' | 'document' | 'retake';
 
 /**
  * Actions the matrix distinguishes:
@@ -114,6 +114,21 @@ const ACCESS_MATRIX: Record<ResourceKind, Partial<Record<AccessLevel, readonly R
     read: ['owner', 'scoped_faculty', 'admin'],
     write: ['owner'],
     delete: ['owner', 'admin'],
+  },
+
+  /**
+   * A retake is its own resource rather than a wider `submission.write`, because the
+   * two say different things. Faculty decide *whether a closed day reopens*; the
+   * student still authors the answers. Folding this into submission write would have
+   * let a reviewer write answers, which is exactly what that entry forbids.
+   *
+   * The student reads their own grants — they have to see one to use it — and can
+   * never create or remove one.
+   */
+  retake: {
+    read: ['owner', 'scoped_faculty', 'admin'],
+    write: ['scoped_faculty', 'admin'],
+    delete: ['scoped_faculty', 'admin'],
   },
 };
 

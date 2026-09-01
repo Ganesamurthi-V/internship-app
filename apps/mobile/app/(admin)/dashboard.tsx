@@ -2,7 +2,7 @@
  * Admin Dashboard — overview of all faculty and students across departments.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api/client';
-import { useDashboard } from '@/lib/api/hooks';
+import { LIVE_REFETCH_INTERVAL_MS, useDashboard } from '@/lib/api/hooks';
 import { useAuthStore } from '@/stores/authStore';
 import { colors, shadow, spacing } from '@/constants/theme';
 import type { FacultyDashboard as FacultyDashboardData } from '@ims/shared-types';
@@ -28,13 +28,18 @@ export default function AdminDashboardScreen() {
   const insets = useSafeAreaInsets();
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
-  const { data: dashData, isRefetching, refetch } = useDashboard();
+  const { data: dashData, isRefetching, refetch, dataUpdatedAt, isFetching } = useDashboard();
+
+  // The header's Faculty tile comes from here, so it polls on the same cadence as
+  // the dashboard counters. Without a matching interval the three header numbers
+  // would drift out of step with each other.
   const { data: faculty } = useQuery({
     queryKey: ['faculty'],
     queryFn: () => api.get<FacultyItem[]>('/faculty'),
-    staleTime: 60 * 1000,
+    refetchInterval: LIVE_REFETCH_INTERVAL_MS,
   });
 
+  const lastUpdatedLabel = useRelativeTime(dataUpdatedAt);
   const [signingOut, setSigningOut] = useState(false);
 
   const dashboard = dashData && dashData.role !== 'student'
@@ -56,15 +61,28 @@ export default function AdminDashboardScreen() {
       >
         {/* Gradient Header */}
         <LinearGradient colors={['#2d3a8c', '#414fb8', '#5b6abf']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
+          {/* Sign out lives only in the Account card below, so the header stays
+              clean and the action is harder to hit by accident. */}
           <View style={styles.headerRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.headerLabel}>Admin Panel</Text>
               <Text style={styles.headerWelcome}>Welcome back,</Text>
               <Text style={styles.headerName}>{user?.name ?? 'Administrator'}</Text>
             </View>
-            <Pressable style={styles.settingsButton} onPress={() => void onSignOut()} disabled={signingOut}>
-              <MaterialIcons name="logout" size={20} color="#fff" />
-            </Pressable>
+          </View>
+
+          {/* Makes the auto-refresh visible, so a figure that has not changed is
+              distinguishable from a screen that has stopped updating. The dot
+              carries the in-flight state rather than the text, which would
+              otherwise reflow every fifteen seconds. */}
+          <View style={styles.liveRow}>
+            <View style={[styles.liveDot, isFetching && styles.liveDotActive]} />
+            <Text
+              style={styles.liveText}
+              accessibilityLabel={`Figures update automatically. Last updated ${lastUpdatedLabel}.`}
+            >
+              Live {'\u00b7'} updated {lastUpdatedLabel}
+            </Text>
           </View>
 
           {/* Stats row in header */}
@@ -78,31 +96,10 @@ export default function AdminDashboardScreen() {
               <Text style={styles.headerStatValue}>{dashboard?.totalStudents ?? 0}</Text>
               <Text style={styles.headerStatLabel}>Students</Text>
             </View>
-            <View style={styles.headerStatDivider} />
-            <View style={styles.headerStat}>
-              <Text style={styles.headerStatValue}>{dashboard?.activeQuestions ?? 0}</Text>
-              <Text style={styles.headerStatLabel}>Questions</Text>
-            </View>
           </View>
         </LinearGradient>
 
         <View style={styles.content}>
-          {/* Today's Summary */}
-          {dashboard && (
-            <View style={styles.card}>
-              <View style={styles.cardTitleRow}>
-                <MaterialIcons name="calendar-today" size={18} color={colors.primary} />
-                <Text style={styles.sectionTitle}>Today's Summary</Text>
-              </View>
-              <View style={styles.statsGrid}>
-                <StatCircle icon="send" label="Submitted" value={dashboard.submittedToday} color="#414fb8" bgColor="#eceef8" />
-                <StatCircle icon="check-circle" label="Approved" value={dashboard.approvedToday} color={colors.success} bgColor={colors.successBg} />
-                <StatCircle icon="cancel" label="Declined" value={dashboard.declinedToday} color={colors.danger} bgColor={colors.dangerBg} />
-                <StatCircle icon="schedule" label="Missing" value={dashboard.missingToday} color={colors.warning} bgColor={colors.warningBg} />
-              </View>
-            </View>
-          )}
-
           {/* Quick Actions */}
           <View style={styles.tileRow}>
             <Pressable style={[styles.tile, { backgroundColor: '#eceef8' }]} onPress={() => router.push('/(admin)/faculty')}>
@@ -187,16 +184,29 @@ export default function AdminDashboardScreen() {
   );
 }
 
-function StatCircle({ icon, label, value, color, bgColor }: { icon: keyof typeof MaterialIcons.glyphMap; label: string; value: number; color: string; bgColor: string }) {
-  return (
-    <View style={styles.statItem}>
-      <View style={[styles.statCircle, { backgroundColor: bgColor }]}>
-        <MaterialIcons name={icon} size={18} color={color} />
-      </View>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={[styles.statValue, { color }]}>{value}</Text>
-    </View>
-  );
+/**
+ * A "3s ago" label that keeps counting between refetches.
+ *
+ * React Query only re-renders when it fetches, so without its own tick the label
+ * would freeze at "just now" for the whole poll interval and read as though the
+ * screen had stopped working.
+ */
+function useRelativeTime(timestamp: number): string {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!timestamp) return 'never';
+
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 10) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.round(minutes / 60)}h ago`;
 }
 
 const styles = StyleSheet.create({
@@ -206,7 +216,10 @@ const styles = StyleSheet.create({
   headerLabel: { fontSize: 13, color: '#ffffffaa', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
   headerWelcome: { fontSize: 13, color: '#ffffffcc', marginTop: 8 },
   headerName: { fontSize: 22, fontWeight: '800', color: '#fff' },
-  settingsButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#ffffff20', alignItems: 'center', justifyContent: 'center' },
+  liveRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
+  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#ffffff66' },
+  liveDotActive: { backgroundColor: '#8ce8b4' },
+  liveText: { fontSize: 11, color: '#ffffffcc', fontVariant: ['tabular-nums'] },
   headerStats: { flexDirection: 'row', backgroundColor: '#ffffff15', borderRadius: 14, padding: 14, marginTop: 18, alignItems: 'center' },
   headerStat: { flex: 1, alignItems: 'center' },
   headerStatValue: { fontSize: 22, fontWeight: '800', color: '#fff' },
@@ -221,11 +234,6 @@ const styles = StyleSheet.create({
   iconCircle: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
   cardTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
   cardSubtitle: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  statsGrid: { flexDirection: 'row', justifyContent: 'space-between' },
-  statItem: { alignItems: 'center', flex: 1 },
-  statCircle: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
-  statLabel: { fontSize: 10, color: colors.textMuted, textAlign: 'center' },
-  statValue: { fontSize: 18, fontWeight: '800', marginTop: 2 },
   tileRow: { flexDirection: 'row', gap: 12 },
   tile: { flex: 1, borderRadius: 14, padding: 16, minHeight: 100 },
   tileIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },

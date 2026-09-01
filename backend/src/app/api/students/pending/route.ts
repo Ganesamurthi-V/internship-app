@@ -50,6 +50,7 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
       endDate: true,
       durationDays: true,
       workingHoursPerDay: true,
+      workingDays: true,
       mentorName: true,
       mentorDesignation: true,
       mentorContact: true,
@@ -80,6 +81,9 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
     endDate: s.endDate?.toISOString().slice(0, 10) ?? null,
     durationDays: s.durationDays,
     workingHoursPerDay: s.workingHoursPerDay,
+    // Part of what an admin is approving: it decides which days this student will be
+    // marked absent for.
+    workingDays: s.workingDays,
     mentorName: s.mentorName,
     mentorDesignation: s.mentorDesignation,
     mentorContact: s.mentorContact,

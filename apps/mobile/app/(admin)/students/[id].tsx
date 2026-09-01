@@ -1,5 +1,9 @@
 /**
- * Student detail — redesigned with gradient header and safe area.
+ * Admin student detail — read-only monitoring view.
+ *
+ * Mirrors the faculty student detail screen, but the submission history rows are
+ * not tappable: the admin section has no review route, so linking them would be a
+ * dead end. Admins oversee across departments; reviewing stays with faculty.
  */
 
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -7,15 +11,15 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { describeWorkingDays } from '@ims/shared-types';
 import { ProgressRing } from '@/components/ui/ProgressRing';
 import { StatusPill } from '@/components/ui/StatusPill';
+import { describeWorkingDays } from '@ims/shared-types';
 import { RetakeManager } from '@/components/faculty/RetakeManager';
 import { useStudentDetail } from '@/lib/api/hooks';
 import { PROGRAMME_LABEL } from '@/constants/academics';
 import { colors, fontSize, shadow, spacing } from '@/constants/theme';
 
-export default function StudentDetailScreen() {
+export default function AdminStudentDetailScreen() {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data, isLoading, error, refetch, isRefetching } = useStudentDetail(id);
@@ -23,7 +27,7 @@ export default function StudentDetailScreen() {
   if (isLoading && !data) {
     return (
       <View style={styles.container}>
-        <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
+        <LinearGradient colors={['#2d3a8c', '#414fb8', '#5b6abf']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
           <Pressable onPress={() => router.back()} style={styles.backBtn}>
             <MaterialIcons name="arrow-back" size={22} color="#fff" />
           </Pressable>
@@ -37,7 +41,7 @@ export default function StudentDetailScreen() {
   if (error && !data) {
     return (
       <View style={styles.container}>
-        <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
+        <LinearGradient colors={['#2d3a8c', '#414fb8', '#5b6abf']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
           <Pressable onPress={() => router.back()} style={styles.backBtn}>
             <MaterialIcons name="arrow-back" size={22} color="#fff" />
           </Pressable>
@@ -60,7 +64,7 @@ export default function StudentDetailScreen() {
   return (
     <View style={styles.container}>
       {/* Gradient Header */}
-      <LinearGradient colors={['#414fb8', '#5b6abf', '#7b85d4']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
+      <LinearGradient colors={['#2d3a8c', '#414fb8', '#5b6abf']} style={[styles.header, { paddingTop: insets.top + 16 }]}>
         <View style={styles.headerRow}>
           <Pressable onPress={() => router.back()} style={styles.backBtn}>
             <MaterialIcons name="arrow-back" size={22} color="#fff" />
@@ -123,7 +127,7 @@ export default function StudentDetailScreen() {
               them — are both invisible from the numbers alone. */}
           <Text style={styles.attendanceNote}>
             Starts at 100% and drops only when a working day closes without an approved
-            answer. A day awaiting your review does not count against the student.
+            answer. A day awaiting review does not count against the student.
             {summary.workingDays && summary.workingDays.length > 0
               ? ` Counted on ${describeWorkingDays(summary.workingDays)}.`
               : ''}
@@ -133,10 +137,11 @@ export default function StudentDetailScreen() {
           </Text>
         </View>
 
-        {/* Retakes — directly under attendance, since that is the number it moves. */}
+        {/* Retakes — an admin is a reviewer with institution-wide scope, so the same
+            grant controls apply here as on the faculty screen. */}
         {id ? <RetakeManager studentId={id} /> : null}
 
-        {/* Submissions Card */}
+        {/* Submissions Card — read-only, admins do not review */}
         <View style={styles.card}>
           <View style={styles.cardTitleRow}>
             <MaterialIcons name="history" size={18} color={colors.primary} />
@@ -146,11 +151,7 @@ export default function StudentDetailScreen() {
             <Text style={styles.muted}>Nothing submitted yet.</Text>
           ) : (
             history.map((submission) => (
-              <Pressable
-                key={submission.id}
-                style={styles.historyRow}
-                onPress={() => router.push(`/(faculty)/review/${submission.id}`)}
-              >
+              <View key={submission.id} style={styles.historyRow}>
                 <View style={styles.historyDateCircle}>
                   <Text style={styles.historyDay}>{new Date(`${submission.submissionDate}T00:00:00Z`).getUTCDate()}</Text>
                   <Text style={styles.historyMonth}>{new Date(`${submission.submissionDate}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' })}</Text>
@@ -158,9 +159,8 @@ export default function StudentDetailScreen() {
                 <Text style={styles.historyDate}>{submission.submissionDate}</Text>
                 <View style={styles.historyRight}>
                   <StatusPill status={submission.status} compact />
-                  <MaterialIcons name="chevron-right" size={18} color={colors.textFaint} />
                 </View>
-              </Pressable>
+              </View>
             ))
           )}
         </View>

@@ -19,10 +19,16 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import type { InternshipDomain, InternshipMode } from '@ims/shared-types';
 import {
+  DEFAULT_WORKING_DAYS,
   INTERNSHIP_DOMAINS,
   INTERNSHIP_DOMAIN_LABELS,
   INTERNSHIP_MODES,
   INTERNSHIP_MODE_LABELS,
+  WORKING_DAY_PICKER_ORDER,
+  WORKING_DAY_LABELS,
+  WORKING_DAY_SHORT_LABELS,
+  describeWorkingDays,
+  type WorkingDay,
 } from '@ims/shared-types';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
@@ -30,6 +36,7 @@ import { ChipGroup, type ChipOption } from '@/components/ui/Chips';
 import { api, ApiError } from '@/lib/api/client';
 import { useDepartments } from '@/lib/api/hooks';
 import { uploadFileAnonymous, type PickedFile, type PreRegistrationUpload } from '@/lib/api/upload';
+import { PROGRAMME_LABEL } from '@/constants/academics';
 import { colors, fontSize, radius, spacing } from '@/constants/theme';
 
 // ---------------------------------------------------------------------------
@@ -74,6 +81,8 @@ interface FormData {
   endDate: string;
   totalDuration: string;
   workingHoursPerDay: string;
+  /** Weekdays the placement runs on, 0 = Sunday. Attendance is measured on these only. */
+  workingDays: number[];
   mentorName: string;
   mentorDesignation: string;
   mentorContact: string;
@@ -85,6 +94,9 @@ const INITIAL: FormData = {
   email: '', mobile: '', organisationName: '', organisationLocation: '',
   internshipDomain: null, otherDomain: '', internshipMode: null,
   startDate: '', endDate: '', totalDuration: '', workingHoursPerDay: '',
+  // Pre-selected rather than blank: Monday-to-Friday is the common case, and starting
+  // from it means most students confirm rather than construct their week.
+  workingDays: [...DEFAULT_WORKING_DAYS],
   mentorName: '', mentorDesignation: '', mentorContact: '', facultyCoordinator: '',
 };
 
@@ -118,6 +130,28 @@ export default function StudentRegisterScreen() {
   // Store in-flight upload promises so submit can await them
   const offerPromiseRef = useRef<Promise<PreRegistrationUpload | null> | null>(null);
   const joiningPromiseRef = useRef<Promise<PreRegistrationUpload | null> | null>(null);
+
+  /**
+   * Adds or removes one weekday.
+   *
+   * Kept sorted so the stored array matches what the server writes and two students
+   * with the same week never hold differently-ordered arrays. Deselecting the last day
+   * is allowed here and caught on submit, so the error explains the rule rather than
+   * the tap silently doing nothing.
+   */
+  const toggleWorkingDay = (day: WorkingDay) => {
+    setForm((prev) => ({
+      ...prev,
+      workingDays: prev.workingDays.includes(day)
+        ? prev.workingDays.filter((existing) => existing !== day)
+        : [...prev.workingDays, day].sort((a, b) => a - b),
+    }));
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next.workingDays;
+      return next;
+    });
+  };
 
   const set = <K extends keyof FormData>(key: K, value: FormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -201,6 +235,9 @@ export default function StudentRegisterScreen() {
         errs.totalDuration = 'Select both dates';
       }
       if (!form.workingHoursPerDay.trim()) errs.workingHoursPerDay = 'Required';
+      // An empty week would leave attendance with nothing to measure against, so it is
+      // stopped here rather than at the server.
+      if (form.workingDays.length === 0) errs.workingDays = 'Pick at least one day';
     } else if (s === 2) {
       if (!form.mentorName.trim()) errs.mentorName = 'Required';
       if (!form.mentorDesignation.trim()) errs.mentorDesignation = 'Required';
@@ -274,7 +311,9 @@ export default function StudentRegisterScreen() {
       const res = await api.anonymous.post<{ message: string; registerNumber: string; status: string }>('/auth/student-register', {
         name: form.name.trim(),
         registerNumber: form.registerNumber.trim().toUpperCase(),
-        programme: form.department,
+        // Single-programme institution — the department dropdown is a separate
+        // field, so programme is always the fixed label rather than the dept name.
+        programme: PROGRAMME_LABEL,
         departmentId: form.departmentId || null,
         year: form.year ? Number(form.year) : undefined,
         section: form.section.trim().toUpperCase(),
@@ -288,6 +327,7 @@ export default function StudentRegisterScreen() {
         endDate: form.endDate,
         durationDays: form.totalDuration ? Number(form.totalDuration) : undefined,
         workingHoursPerDay: form.workingHoursPerDay ? Number(form.workingHoursPerDay) : undefined,
+        workingDays: form.workingDays,
         mentorName: form.mentorName.trim(),
         mentorDesignation: form.mentorDesignation.trim(),
         mentorContact: form.mentorContact.trim(),
@@ -522,6 +562,54 @@ export default function StudentRegisterScreen() {
                   placeholder="8" keyboardType="numeric" error={fieldErrors.workingHoursPerDay} />
               </View>
             </View>
+
+            {/* Working days.
+                Placed with the schedule fields because it is part of the schedule, and
+                immediately below the dates it interacts with: the start and end dates
+                give the internship its span, and these decide which days inside that
+                span count. */}
+            <View style={styles.workingDaysBlock}>
+              <Text style={styles.label}>
+                Working Days <Text style={styles.req}>*</Text>
+              </Text>
+              <Text style={styles.workingDaysHelp}>
+                Tap the days your internship runs. Attendance is only counted on these
+                days, so you are never marked absent for a day off.
+              </Text>
+
+              <View style={styles.workingDaysRow}>
+                {WORKING_DAY_PICKER_ORDER.map((day) => {
+                  const selected = form.workingDays.includes(day);
+                  return (
+                    <Pressable
+                      key={day}
+                      onPress={() => toggleWorkingDay(day)}
+                      style={[styles.dayPill, selected && styles.dayPillOn]}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: selected }}
+                      accessibilityLabel={WORKING_DAY_LABELS[day]}
+                      accessibilityHint={
+                        selected ? 'Tap to mark as a day off' : 'Tap to mark as a working day'
+                      }
+                    >
+                      <Text style={[styles.dayPillText, selected && styles.dayPillTextOn]}>
+                        {WORKING_DAY_SHORT_LABELS[day]}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {fieldErrors.workingDays ? (
+                <Text style={styles.fieldError}>{fieldErrors.workingDays}</Text>
+              ) : (
+                <Text style={styles.workingDaysSummary}>
+                  {form.workingDays.length > 0
+                    ? `${describeWorkingDays(form.workingDays)} \u00b7 ${form.workingDays.length} day${form.workingDays.length === 1 ? '' : 's'} a week`
+                    : 'Choose at least one day.'}
+                </Text>
+              )}
+            </View>
           </View>
         )}
 
@@ -717,6 +805,38 @@ const styles = StyleSheet.create({
   req: { color: colors.danger },
   fieldWrap: { marginBottom: spacing.lg },
   fieldError: { color: colors.danger, fontSize: fontSize.caption, marginTop: 4 },
+
+  // Working days
+  workingDaysBlock: { marginBottom: spacing.lg },
+  workingDaysHelp: {
+    fontSize: fontSize.caption,
+    color: colors.textMuted,
+    lineHeight: 16,
+    marginBottom: spacing.md,
+  },
+  workingDaysRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  dayPill: {
+    // 44 is the accessibility floor from the theme's touchTarget reasoning; the row has
+    // to fit seven of these across a phone, so it uses the minimum rather than 48.
+    minWidth: 44,
+    minHeight: 44,
+    paddingHorizontal: 6,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayPillOn: { borderColor: colors.primary, backgroundColor: colors.primary },
+  dayPillText: { fontSize: fontSize.small, fontWeight: '700', color: colors.textMuted },
+  dayPillTextOn: { color: colors.onPrimary },
+  workingDaysSummary: {
+    fontSize: fontSize.caption,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
+    fontWeight: '600',
+  },
 
   // Dropdown
   dropdown: {

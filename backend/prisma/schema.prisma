@@ -112,6 +112,7 @@ model User {
 
   authoredQuestions  Question[]        @relation("QuestionAuthor")
   reviewedSubmissions DailySubmission[] @relation("SubmissionReviewer")
+  grantedRetakes      RetakeGrant[]     @relation("RetakeGranter")
 
   @@index([authId])
   @@index([role, status])
@@ -165,6 +166,19 @@ model Student {
   durationDays         Int?    @map("duration_days")
   workingHoursPerDay   Int?    @map("working_hours_per_day")
 
+  /// Weekdays this student is expected to answer on, numbered 0 = Sunday to
+  /// 6 = Saturday to match `Date.prototype.getUTCDay`.
+  ///
+  /// Attendance is measured only against these days: a student is never marked absent
+  /// for a day their placement never expected them to work. Stored per student rather
+  /// than as an institution setting because six-day weeks and shift patterns differ by
+  /// placement, and the registration form asks.
+  ///
+  /// NOT NULL with a Mon-Fri default so every existing row is valid the moment the
+  /// column lands, and so a bug that forgets to set it degrades to the common case
+  /// rather than to "no working days", which would make attendance unmeasurable.
+  workingDays          Int[]   @default([1, 2, 3, 4, 5]) @map("working_days")
+
   mentorName           String? @map("mentor_name")
   mentorDesignation    String? @map("mentor_designation")
   mentorContact        String? @map("mentor_contact")
@@ -177,7 +191,8 @@ model Student {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  submissions DailySubmission[]
+  submissions  DailySubmission[]
+  retakeGrants RetakeGrant[]
 
   @@index([registerNumber])
   @@index([departmentId])
@@ -271,6 +286,59 @@ model DailySubmission {
   @@index([status, submissionDate])
   @@index([studentId, submissionDate])
   @@map("daily_submissions")
+}
+
+/// Permission for one student to answer one already-closed day.
+///
+/// The submission window is whole-day and shuts at midnight
+/// (`SUBMISSION_BACKDATE_DAYS = 0`), so a missed day is otherwise absent forever.
+/// A grant reopens exactly one date for exactly one student: the narrowest hole
+/// that lets faculty accept a genuine reason for missing without reopening the
+/// window for everybody.
+///
+/// Rows are never deleted. `revokedAt` withdraws a grant and `usedAt` records the
+/// first submission made under it, so the reason a closed day became writable stays
+/// answerable months later.
+model RetakeGrant {
+  id String @id @default(uuid()) @db.Uuid
+
+  studentId String  @map("student_id") @db.Uuid
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  /// The closed day being reopened. DATE, not timestamp, to match
+  /// `DailySubmission.submissionDate` — "which day" is never a timezone question.
+  targetDate DateTime @map("target_date") @db.Date
+
+  /// SetNull rather than Cascade: removing a faculty account must not erase the
+  /// record that a retake was allowed, or attendance becomes unauditable.
+  grantedById String? @map("granted_by") @db.Uuid
+  grantedBy   User?   @relation("RetakeGranter", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  grantedAt DateTime @default(now()) @map("granted_at") @db.Timestamptz(6)
+
+  /// Why the day was reopened. Shown to the student, so a reopened day is never
+  /// unexplained, and kept as the justification on the record.
+  reason String?
+
+  /// Last day the student may use it, inclusive. Without a deadline a closed day
+  /// would stay writable forever, which defeats the point of having a window.
+  expiresOn DateTime @map("expires_on") @db.Date
+
+  /// When the student first submitted under this grant. Informational only: the
+  /// grant stays usable until it expires so a declined retake can still be fixed.
+  usedAt DateTime? @map("used_at") @db.Timestamptz(6)
+
+  /// Set when a reviewer withdraws the grant before it was used. Who revoked it
+  /// lives in the audit log rather than a second nullable FK here.
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  /// One grant per student per day. Re-granting the same day updates this row
+  /// instead of stacking duplicates that would each look separately available.
+  @@unique([studentId, targetDate])
+  @@map("retake_grants")
 }
 
 model Answer {

@@ -11,7 +11,8 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { ListSkeleton } from '@/components/ui/SkeletonLoader';
-import { useStudentList } from '@/lib/api/hooks';
+import type { FacultyDashboard as FacultyDashboardData } from '@ims/shared-types';
+import { useDashboard, useStudentList } from '@/lib/api/hooks';
 import { colors, fontSize, shadow, spacing } from '@/constants/theme';
 
 type Filter = 'all' | 'submitted' | 'missing';
@@ -32,6 +33,14 @@ export default function StudentsScreen() {
     submittedToday: filter === 'all' ? undefined : filter === 'submitted',
   });
 
+  // Reuses the dashboard query, which is already cached app-wide, so surfacing the
+  // pending count here costs no extra request.
+  const { data: dashData } = useDashboard();
+  const pendingCount =
+    dashData && dashData.role !== 'student'
+      ? ((dashData.dashboard as FacultyDashboardData).pendingStudents ?? 0)
+      : 0;
+
   const items = data?.items ?? [];
 
   return (
@@ -40,8 +49,38 @@ export default function StudentsScreen() {
         colors={['#414fb8', '#5b6abf', '#7b85d4']}
         style={[styles.header, { paddingTop: insets.top + 16 }]}
       >
-        <Text style={styles.headerTitle}>Students</Text>
-        <Text style={styles.headerSubtitle}>View and manage students in your scope</Text>
+        <View style={styles.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerTitle}>Students</Text>
+            <Text style={styles.headerSubtitle}>View and manage students in your scope</Text>
+          </View>
+
+          {/* The only route to pending approvals, so it lives here rather than on the
+              dashboard — the pending screen is a sibling of this one in the same stack.
+              The count is shown because an unapproved student cannot log in at all, and
+              a reviewer who never learns a registration arrived never approves it. */}
+          <Pressable
+            style={styles.pendingButton}
+            onPress={() => router.push('/(faculty)/students/pending')}
+            accessibilityRole="button"
+            accessibilityLabel={
+              pendingCount > 0
+                ? `Review ${pendingCount} pending registration${pendingCount === 1 ? '' : 's'}`
+                : 'Pending registrations'
+            }
+          >
+            <MaterialIcons name="person-add" size={20} color="#fff" />
+            {/* Coerced, because this field is absent until the API that returns it is
+                deployed, and an uncoerced value renders the literal word "undefined". */}
+            {pendingCount > 0 ? (
+              <View style={styles.pendingBadge}>
+                <Text style={styles.pendingBadgeText}>
+                  {pendingCount > 9 ? '9+' : pendingCount}
+                </Text>
+              </View>
+            ) : null}
+          </Pressable>
+        </View>
       </LinearGradient>
 
       <FlatList
@@ -108,9 +147,13 @@ export default function StudentsScreen() {
                   {item.section ? ` \u00b7 Sec ${item.section}` : ''}
                   {item.year ? ` \u00b7 Year ${item.year}` : ''}
                 </Text>
+                {/* Percentage first, since that is what a reviewer scans for, then the
+                    days behind it. Absent is always printed, including as 0, so a clean
+                    record reads as a fact rather than as missing data. */}
                 <Text style={styles.meta}>
-                  {item.summary.daysApproved}/{item.summary.daysSubmitted} approved
-                  {item.summary.approvalPercentage !== null ? ` \u00b7 ${item.summary.approvalPercentage}%` : ''}
+                  {item.summary.attendancePercentage !== null
+                    ? `${item.summary.attendancePercentage}% \u00b7 ${item.summary.daysAbsent ?? 0} absent of ${item.summary.internshipDays} days`
+                    : 'Attendance not started'}
                 </Text>
               </View>
               <View style={styles.cardRight}>
@@ -134,8 +177,35 @@ export default function StudentsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   header: { paddingHorizontal: 20, paddingBottom: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   headerTitle: { fontSize: 22, fontWeight: '800', color: '#fff' },
   headerSubtitle: { fontSize: 13, color: '#ffffffcc', marginTop: 4 },
+  pendingButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#ffffff20',
+    alignItems: 'center',
+    justifyContent: 'center',
+    // The badge sits outside the circle, so it must not be clipped.
+    position: 'relative',
+  },
+  pendingBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    backgroundColor: colors.warning,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Separates the badge from the gradient behind it.
+    borderWidth: 1.5,
+    borderColor: '#5b6abf',
+  },
+  pendingBadgeText: { fontSize: 10, fontWeight: '800', color: '#fff' },
   list: { padding: 16, paddingBottom: 100 },
   searchSection: { marginBottom: 12, gap: 10 },
   searchBar: {

@@ -4,14 +4,14 @@
     "slug": "internship-manager",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/app_logo.png",
     "scheme": "internshipmanager",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/splash-icon.png",
+      "image": "./assets/app_logo.png",
       "resizeMode": "contain",
-      "backgroundColor": "#4d5cc9"
+      "backgroundColor": "#414fb8"
     },
     "ios": {
       "bundleIdentifier": "edu.smvec.internship",
@@ -26,10 +26,13 @@
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png",
-        "backgroundColor": "#4d5cc9"
+        "backgroundColor": "#414fb8"
       },
       "permissions": [],
       "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "favicon": "./assets/app_logo.png"
     },
     "plugins": [
       "expo-router",

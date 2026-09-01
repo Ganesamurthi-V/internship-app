@@ -78,6 +78,14 @@ export interface Student {
   endDate: DateOnly | null;
   durationDays: number | null;
   workingHoursPerDay: number | null;
+  /**
+   * Weekdays this student is expected to answer on, 0 = Sunday, sorted ascending.
+   *
+   * Attendance is measured only against these days. Always populated — the column is
+   * defaulted to Monday-to-Friday, so a student registered before working days were
+   * configurable reads as a five-day week rather than as no week at all.
+   */
+  workingDays: number[];
   mentorName: string | null;
   mentorDesignation: string | null;
   mentorContact: string | null;
@@ -196,6 +204,48 @@ export interface SubmissionStudentSummary {
 }
 
 // ---------------------------------------------------------------------------
+// Retakes
+// ---------------------------------------------------------------------------
+
+/**
+ * A faculty-granted second chance at one closed day.
+ *
+ * A missed day is absent and the day cannot be reopened by the student, so this is
+ * the only route back. The grant names its reason and its deadline because the
+ * student is shown both: an unexplained reopened day, or one with no visible
+ * deadline, is worse than no second chance at all.
+ */
+export interface RetakeInfo {
+  id: Uuid;
+  /** The closed day this reopens. */
+  targetDate: DateOnly;
+  /** Null if the granting account has since been removed. */
+  grantedByName: string | null;
+  grantedAt: Timestamp;
+  reason: string | null;
+  /** Last day the student may use it, inclusive. */
+  expiresOn: DateOnly;
+  /** When the student first submitted under it. Still usable until it expires. */
+  usedAt: Timestamp | null;
+  revokedAt: Timestamp | null;
+  /** False once revoked or expired. Computed server-side against the institution clock. */
+  isActive: boolean;
+}
+
+/**
+ * A day the student did not get approved, offered to faculty as a retake candidate.
+ *
+ * `status` is why the day is not counted present: `missing` means nothing was ever
+ * submitted, the other two mean something was but it does not count yet.
+ */
+export interface MissedDay {
+  date: DateOnly;
+  status: 'missing' | 'declined' | 'pending';
+  /** The existing grant for this day, if one has already been given. */
+  retake: RetakeInfo | null;
+}
+
+// ---------------------------------------------------------------------------
 // Today's form
 // ---------------------------------------------------------------------------
 
@@ -215,6 +265,12 @@ export interface TodayForm {
   canSubmit: boolean;
   /** Why `canSubmit` is false, for display. Null when it is true. */
   lockedReason: string | null;
+  /**
+   * The grant reopening this date, when there is one. Present so the form can say
+   * the day is open *because* faculty allowed it, rather than looking like the
+   * deadline never existed.
+   */
+  retake: RetakeInfo | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,21 +278,74 @@ export interface TodayForm {
 // ---------------------------------------------------------------------------
 
 /**
- * Counts computed from a student's submissions. There is no attendance table; a
- * day is attended when an approved submission exists for it, so these numbers
+ * Counts computed from a student's submissions. There is no attendance table; a day
+ * is attended unless an approved submission is missing for it, so these numbers
  * cannot disagree with the submission list.
+ *
+ * ATTENDANCE RULE
+ *
+ * A student starts at 100% and loses ground only by missing a day. The denominator is
+ * `internshipDays` — the working days in their whole internship — and the percentage
+ * is `100 - (daysAbsent / internshipDays)`. Three consequences are deliberate:
+ *
+ *   - Day one is 100%, not 0%. Measuring approvals over elapsed days would open every
+ *     internship at zero and climb, which reads as failure on the first morning.
+ *   - A pending day is *not* absent. The student answered inside the window; whether a
+ *     reviewer has got to it yet is not their conduct. Counting it against them would
+ *     make the percentage sag every evening and recover on approval.
+ *   - Only a day that closed without an approved answer costs anything, and a
+ *     faculty-granted retake that gets approved gives it straight back.
+ *
+ * Days outside the student's chosen working days are not counted at all — not as
+ * present, not as absent, and not in the denominator. A student cannot be marked
+ * absent for a Sunday nobody expected them to work.
  */
 export interface AttendanceSummary {
-  /** Days with an approved submission. */
+  /**
+   * Working days in the whole internship, start date through end date. The
+   * denominator.
+   *
+   * When no end date is recorded there is no way to know the length, so this falls
+   * back to the working days elapsed so far. That keeps the percentage meaningful,
+   * at the cost of a single missed day weighing much more early on.
+   */
+  internshipDays: number;
+  /**
+   * Working days that have closed: start date through yesterday, clipped at the end
+   * date. Today is excluded because it is still answerable.
+   */
+  elapsedDays: number;
+  /** Closed working days with an approved submission. */
   daysApproved: number;
-  /** Days submitted and awaiting review. */
+  /** Working days answered and awaiting review. Not counted absent. */
   daysPending: number;
-  /** Days submitted and declined. */
+  /** Closed working days answered but declined. Counted absent. */
   daysDeclined: number;
-  /** Distinct days with any submission. */
+  /** Closed working days with nothing submitted at all. Counted absent. */
+  daysNotAnswered: number;
+  /**
+   * The days subtracted from 100%: `daysDeclined + daysNotAnswered`.
+   *
+   * Always a number, never null — a student with nothing missed is absent 0 days, and
+   * the UI shows that 0 rather than a blank.
+   */
+  daysAbsent: number;
+  /**
+   * Absent days a faculty retake is currently open on, so the student can still
+   * recover them. A subset of `daysAbsent`, not an addition to it.
+   */
+  daysRecoverable: number;
+  /** Distinct working days with any submission, whatever its status. */
   daysSubmitted: number;
-  /** `daysApproved / daysSubmitted`, rounded to one decimal. Null with no data. */
-  approvalPercentage: number | null;
+  /**
+   * `100 - (daysAbsent / internshipDays) * 100`, rounded to one decimal.
+   *
+   * Null only when the internship has no measurable length yet — no start date and no
+   * submissions — where any number would be invented.
+   */
+  attendancePercentage: number | null;
+  /** The weekdays this was measured against, 0 = Sunday. For display. */
+  workingDays: number[];
   firstSubmissionDate: DateOnly | null;
   lastSubmissionDate: DateOnly | null;
 }
@@ -258,6 +367,12 @@ export interface StudentDashboard {
   summary: AttendanceSummary;
   /** Most recent submissions, newest first, for the history preview. */
   recentSubmissions: DailySubmission[];
+  /**
+   * Usable retake grants, soonest deadline first. On the dashboard rather than
+   * behind a separate call because a grant the student never notices is a grant
+   * that expires unused.
+   */
+  retakes: RetakeInfo[];
 }
 
 export interface FacultyDashboard {
@@ -269,7 +384,17 @@ export interface FacultyDashboard {
   missingToday: number;
   approvedToday: number;
   declinedToday: number;
+  /**
+   * Every student in scope, whatever their account status. Includes pending
+   * registrations awaiting approval, so the header does not read "no students" while
+   * a registration is sitting unactioned.
+   */
   totalStudents: number;
+  /**
+   * Students in scope whose account is still pending approval. Surfaced separately so
+   * the dashboard can prompt the reviewer to act on new registrations.
+   */
+  pendingStudents: number;
   activeQuestions: number;
 }
 

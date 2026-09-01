@@ -11,11 +11,12 @@
  */
 
 import { useEffect } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { colors } from '@/constants/theme';
 import { useAuthStore } from '@/stores/authStore';
 
@@ -70,6 +71,23 @@ export default function RootLayout() {
     if (isBootstrapping) return;
     void SplashScreen.hideAsync();
   }, [isBootstrapping]);
+
+  /**
+   * React Query's focus tracking is written for the web, where it listens for
+   * window focus events that never fire in React Native. Feeding it AppState is
+   * what makes two things work: polling queries pause while the app is
+   * backgrounded instead of burning battery, and everything refetches the moment
+   * the user comes back, so a screen never shows numbers from ten minutes ago.
+   */
+  useEffect(() => {
+    focusManager.setFocused(AppState.currentState === 'active');
+
+    const subscription = AppState.addEventListener('change', (status: AppStateStatus) => {
+      focusManager.setFocused(status === 'active');
+    });
+
+    return () => subscription.remove();
+  }, []);
 
   // Splash screen is still up; rendering a tree here would only be redirected away.
   if (isBootstrapping) return null;

@@ -13,10 +13,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   addDays,
+  countInternshipDays,
+  countWorkingDays,
   countWords,
   dayOfWeek,
   daysBetween,
   enumerateDates,
+  enumerateWorkingDays,
   findMissingRequiredAnswers,
   findUnknownAnswers,
   formatDateOnly,
@@ -24,12 +27,14 @@ import {
   isSubmissionDateAllowed,
   isWeekend,
   isWithinRange,
+  isWorkingDay,
   parseDateOnly,
   sanitizeText,
   submissionLockReason,
   summariseSubmissions,
   emptyAttendanceSummary,
 } from './calculations';
+import { describeWorkingDays } from '@ims/shared-types';
 import { answerValidatorFor } from './question';
 import { validateAnswersAgainstQuestions, type QuestionRule } from './submission';
 import { reviewSubmissionSchema } from './submission';
@@ -221,6 +226,171 @@ describe('submissionLockReason', () => {
       }),
     ).toMatch(/awaiting review/iu);
   });
+
+  // A retake is the one thing that reopens a closed day. These cases pin down that
+  // it reopens *only* that — a grant must not become a general-purpose override.
+  describe('with a granted retake', () => {
+    it('reopens a closed past day', () => {
+      expect(
+        submissionLockReason({
+          ...base,
+          date: '2026-08-10',
+          existingStatus: null,
+          retakeOpen: true,
+        }),
+      ).toBeNull();
+    });
+
+    it('reopens a closed day that was declined, so it can be fixed', () => {
+      expect(
+        submissionLockReason({
+          ...base,
+          date: '2026-08-10',
+          existingStatus: 'declined',
+          retakeOpen: true,
+        }),
+      ).toBeNull();
+    });
+
+    it('still refuses a future date', () => {
+      expect(
+        submissionLockReason({
+          ...base,
+          date: '2026-08-18',
+          existingStatus: null,
+          retakeOpen: true,
+        }),
+      ).toMatch(/future/iu);
+    });
+
+    it('still refuses an approved day, so an approval cannot be edited away', () => {
+      expect(
+        submissionLockReason({
+          ...base,
+          date: '2026-08-10',
+          existingStatus: 'approved',
+          retakeOpen: true,
+        }),
+      ).toMatch(/approved/iu);
+    });
+
+    it('still honours the pending-edit setting', () => {
+      expect(
+        submissionLockReason({
+          ...base,
+          date: '2026-08-10',
+          existingStatus: 'pending',
+          allowEditWhilePending: false,
+          retakeOpen: true,
+        }),
+      ).toMatch(/awaiting review/iu);
+    });
+
+    it('changes nothing when absent, so the default stays closed', () => {
+      expect(
+        submissionLockReason({ ...base, date: '2026-08-10', existingStatus: null }),
+      ).toMatch(/closed/iu);
+
+      expect(
+        submissionLockReason({
+          ...base,
+          date: '2026-08-10',
+          existingStatus: null,
+          retakeOpen: false,
+        }),
+      ).toMatch(/closed/iu);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Attendance summary
+// ---------------------------------------------------------------------------
+
+/**
+ * Calendar anchors for the cases below. August 2026 starts on a Saturday, so:
+ *   Mon 3rd, Tue 4th, Wed 5th, Thu 6th, Fri 7th, Sat 8th, Sun 9th, Mon 10th ...
+ * A four-week internship from Mon 3rd to Fri 28th is 20 Mon-Fri working days.
+ */
+const MON_TO_FRI = [1, 2, 3, 4, 5];
+const MON_TO_SAT = [1, 2, 3, 4, 5, 6];
+
+/** A four-week Mon-Fri internship. 20 working days. */
+const fourWeeks = (today: string, workingDays: number[] = MON_TO_FRI) => ({
+  startDate: '2026-08-03',
+  endDate: '2026-08-28',
+  today,
+  workingDays,
+});
+
+describe('describeWorkingDays', () => {
+  it('collapses a consecutive run into a range', () => {
+    expect(describeWorkingDays([1, 2, 3, 4, 5])).toBe('Mon\u2013Fri');
+    expect(describeWorkingDays([1, 2, 3, 4, 5, 6])).toBe('Mon\u2013Sat');
+    expect(describeWorkingDays([2, 3, 4])).toBe('Tue\u2013Thu');
+  });
+
+  it('lists non-consecutive days separately', () => {
+    expect(describeWorkingDays([1, 3, 5])).toBe('Mon, Wed, Fri');
+    expect(describeWorkingDays([1, 2, 3, 6])).toBe('Mon\u2013Wed, Sat');
+  });
+
+  it('lists a two day run rather than hyphenating it', () => {
+    expect(describeWorkingDays([1, 2])).toBe('Mon, Tue');
+  });
+
+  it('orders Monday first, so a weekday week is one run and not split by Sunday', () => {
+    // Sunday is day 0, so a naive ascending sort would render this as "Sun, Mon-Fri".
+    expect(describeWorkingDays([0, 1, 2, 3, 4, 5])).toBe('Mon\u2013Fri, Sun');
+  });
+
+  it('does not merge Saturday into Sunday', () => {
+    // Adjacent by day number (6 then 0) but not adjacent in the week as displayed.
+    expect(describeWorkingDays([6, 0])).toBe('Sat, Sun');
+  });
+
+  it('handles the whole week and the empty week', () => {
+    expect(describeWorkingDays([0, 1, 2, 3, 4, 5, 6])).toBe('Every day');
+    expect(describeWorkingDays([])).toBe('No working days set');
+  });
+
+  it('ignores duplicates and out-of-range numbers', () => {
+    expect(describeWorkingDays([1, 1, 2, 2])).toBe('Mon, Tue');
+    expect(describeWorkingDays([1, 2, 3, 4, 5, 9, -1])).toBe('Mon\u2013Fri');
+    expect(describeWorkingDays([99])).toBe('No working days set');
+  });
+});
+
+describe('working day helpers', () => {
+  it('identifies working days against getUTCDay numbering', () => {
+    expect(isWorkingDay('2026-08-03', MON_TO_FRI)).toBe(true); // Monday
+    expect(isWorkingDay('2026-08-07', MON_TO_FRI)).toBe(true); // Friday
+    expect(isWorkingDay('2026-08-08', MON_TO_FRI)).toBe(false); // Saturday
+    expect(isWorkingDay('2026-08-09', MON_TO_FRI)).toBe(false); // Sunday
+    expect(isWorkingDay('2026-08-08', MON_TO_SAT)).toBe(true);
+  });
+
+  it('counts working days inclusively across whole weeks', () => {
+    // Mon 3rd to Fri 28th.
+    expect(countWorkingDays('2026-08-03', '2026-08-28', MON_TO_FRI)).toBe(20);
+    expect(countWorkingDays('2026-08-03', '2026-08-28', MON_TO_SAT)).toBe(23);
+    // A single Monday.
+    expect(countWorkingDays('2026-08-03', '2026-08-03', MON_TO_FRI)).toBe(1);
+    // A weekend on its own.
+    expect(countWorkingDays('2026-08-08', '2026-08-09', MON_TO_FRI)).toBe(0);
+  });
+
+  it('returns 0 for a reversed range or an empty working week', () => {
+    expect(countWorkingDays('2026-08-28', '2026-08-03', MON_TO_FRI)).toBe(0);
+    expect(countWorkingDays('2026-08-03', '2026-08-28', [])).toBe(0);
+  });
+
+  it('enumerates the working days it counts', () => {
+    expect(enumerateWorkingDays('2026-08-07', '2026-08-10', MON_TO_FRI)).toEqual([
+      '2026-08-07',
+      '2026-08-10',
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -228,34 +398,284 @@ describe('submissionLockReason', () => {
 // ---------------------------------------------------------------------------
 
 describe('summariseSubmissions', () => {
-  it('returns the zeroed summary for no submissions', () => {
+  it('returns the zeroed summary for no submissions and no window', () => {
     expect(summariseSubmissions([])).toEqual(emptyAttendanceSummary());
   });
 
-  it('counts each status and computes approval over submitted days', () => {
-    const summary = summariseSubmissions([
-      { submissionDate: '2026-08-10', status: 'approved' },
-      { submissionDate: '2026-08-11', status: 'approved' },
-      { submissionDate: '2026-08-12', status: 'approved' },
-      { submissionDate: '2026-08-13', status: 'pending' },
-      { submissionDate: '2026-08-14', status: 'declined' },
-    ]);
+  // -- The starting point -------------------------------------------------
 
-    expect(summary.daysApproved).toBe(3);
-    expect(summary.daysPending).toBe(1);
-    expect(summary.daysDeclined).toBe(1);
-    expect(summary.daysSubmitted).toBe(5);
-    expect(summary.approvalPercentage).toBe(60);
+  it('is 100% on the first morning, before anything has been answered', () => {
+    const summary = summariseSubmissions([], fourWeeks('2026-08-03'));
+
+    expect(summary.internshipDays).toBe(20);
+    // Today has not closed, so nothing is missed yet.
+    expect(summary.elapsedDays).toBe(0);
+    expect(summary.daysAbsent).toBe(0);
+    expect(summary.attendancePercentage).toBe(100);
   });
 
-  it('rounds the percentage to one decimal', () => {
-    const summary = summariseSubmissions([
-      { submissionDate: '2026-08-10', status: 'approved' },
-      { submissionDate: '2026-08-11', status: 'approved' },
-      { submissionDate: '2026-08-12', status: 'declined' },
-    ]);
-    // 2/3 = 66.666… -> 66.7
-    expect(summary.approvalPercentage).toBe(66.7);
+  it('stays at 100% while every closed day was answered and approved', () => {
+    const summary = summariseSubmissions(
+      [
+        { submissionDate: '2026-08-03', status: 'approved' },
+        { submissionDate: '2026-08-04', status: 'approved' },
+      ],
+      fourWeeks('2026-08-05'),
+    );
+
+    expect(summary.daysApproved).toBe(2);
+    expect(summary.daysAbsent).toBe(0);
+    expect(summary.attendancePercentage).toBe(100);
+  });
+
+  // -- Losing ground ------------------------------------------------------
+
+  it('takes one internship day off the total for a day missed entirely', () => {
+    const summary = summariseSubmissions(
+      // Monday never answered; Tuesday answered and approved.
+      [{ submissionDate: '2026-08-04', status: 'approved' }],
+      fourWeeks('2026-08-05'),
+    );
+
+    expect(summary.daysNotAnswered).toBe(1);
+    expect(summary.daysAbsent).toBe(1);
+    // One of twenty internship days lost.
+    expect(summary.attendancePercentage).toBe(95);
+  });
+
+  it('counts a declined closed day as absent', () => {
+    const summary = summariseSubmissions(
+      [
+        { submissionDate: '2026-08-03', status: 'declined' },
+        { submissionDate: '2026-08-04', status: 'approved' },
+      ],
+      fourWeeks('2026-08-05'),
+    );
+
+    expect(summary.daysDeclined).toBe(1);
+    // Declined, not merely unanswered.
+    expect(summary.daysNotAnswered).toBe(0);
+    expect(summary.daysAbsent).toBe(1);
+    expect(summary.attendancePercentage).toBe(95);
+  });
+
+  it('scales the loss with the number of days missed', () => {
+    // Nothing answered at all, three working days closed.
+    const summary = summariseSubmissions([], fourWeeks('2026-08-06'));
+
+    expect(summary.elapsedDays).toBe(3);
+    expect(summary.daysAbsent).toBe(3);
+    expect(summary.attendancePercentage).toBe(85);
+  });
+
+  // -- What must never cost the student anything --------------------------
+
+  it('does not count today as absent while it is still answerable', () => {
+    const summary = summariseSubmissions(
+      [{ submissionDate: '2026-08-03', status: 'approved' }],
+      // Tuesday, with Tuesday not yet answered.
+      fourWeeks('2026-08-04'),
+    );
+
+    expect(summary.elapsedDays).toBe(1);
+    expect(summary.daysAbsent).toBe(0);
+    expect(summary.attendancePercentage).toBe(100);
+  });
+
+  it('does not count a day awaiting review as absent', () => {
+    const summary = summariseSubmissions(
+      [
+        { submissionDate: '2026-08-03', status: 'approved' },
+        { submissionDate: '2026-08-04', status: 'pending' },
+        { submissionDate: '2026-08-05', status: 'pending' },
+      ],
+      fourWeeks('2026-08-06'),
+    );
+
+    expect(summary.daysPending).toBe(2);
+    // The student answered in time; the review queue is not their conduct.
+    expect(summary.daysAbsent).toBe(0);
+    expect(summary.attendancePercentage).toBe(100);
+  });
+
+  it('does not count a non-working day as absent', () => {
+    // Monday 10th, so the weekend of the 8th and 9th has closed unanswered.
+    const summary = summariseSubmissions(
+      [
+        { submissionDate: '2026-08-03', status: 'approved' },
+        { submissionDate: '2026-08-04', status: 'approved' },
+        { submissionDate: '2026-08-05', status: 'approved' },
+        { submissionDate: '2026-08-06', status: 'approved' },
+        { submissionDate: '2026-08-07', status: 'approved' },
+      ],
+      fourWeeks('2026-08-10'),
+    );
+
+    expect(summary.elapsedDays).toBe(5);
+    expect(summary.daysAbsent).toBe(0);
+    expect(summary.attendancePercentage).toBe(100);
+  });
+
+  it('does count a missed Saturday when Saturday is a working day', () => {
+    const summary = summariseSubmissions(
+      [
+        { submissionDate: '2026-08-03', status: 'approved' },
+        { submissionDate: '2026-08-04', status: 'approved' },
+        { submissionDate: '2026-08-05', status: 'approved' },
+        { submissionDate: '2026-08-06', status: 'approved' },
+        { submissionDate: '2026-08-07', status: 'approved' },
+      ],
+      fourWeeks('2026-08-10', MON_TO_SAT),
+    );
+
+    // Saturday the 8th closed unanswered; Sunday the 9th still does not count.
+    expect(summary.elapsedDays).toBe(6);
+    expect(summary.daysAbsent).toBe(1);
+    expect(summary.internshipDays).toBe(23);
+    expect(summary.attendancePercentage).toBe(95.7);
+  });
+
+  it('gives no credit for answering on a non-working day', () => {
+    const summary = summariseSubmissions(
+      [
+        { submissionDate: '2026-08-03', status: 'approved' },
+        { submissionDate: '2026-08-04', status: 'approved' },
+        { submissionDate: '2026-08-05', status: 'approved' },
+        { submissionDate: '2026-08-06', status: 'approved' },
+        { submissionDate: '2026-08-07', status: 'approved' },
+        // A Saturday, outside the student's working week.
+        { submissionDate: '2026-08-08', status: 'approved' },
+      ],
+      { startDate: '2026-08-03', endDate: '2026-08-07', today: '2026-08-10', workingDays: MON_TO_FRI },
+    );
+
+    // Five approved, not six — the extra day cannot push anyone past 100%.
+    expect(summary.daysApproved).toBe(5);
+    expect(summary.daysSubmitted).toBe(5);
+    expect(summary.attendancePercentage).toBe(100);
+  });
+
+  // -- Recovery -----------------------------------------------------------
+
+  it('gives the percentage back once a missed day is approved on retake', () => {
+    const window = fourWeeks('2026-08-05');
+
+    const missed = summariseSubmissions(
+      [{ submissionDate: '2026-08-04', status: 'approved' }],
+      window,
+    );
+    expect(missed.attendancePercentage).toBe(95);
+
+    // The same window, with the missed Monday now answered and approved.
+    const recovered = summariseSubmissions(
+      [
+        { submissionDate: '2026-08-03', status: 'approved' },
+        { submissionDate: '2026-08-04', status: 'approved' },
+      ],
+      window,
+    );
+    expect(recovered.daysAbsent).toBe(0);
+    expect(recovered.attendancePercentage).toBe(100);
+  });
+
+  it('reports which absent days a retake could still recover', () => {
+    const summary = summariseSubmissions(
+      [{ submissionDate: '2026-08-05', status: 'approved' }],
+      { ...fourWeeks('2026-08-06'), retakeOpenDates: ['2026-08-03'] },
+    );
+
+    expect(summary.daysAbsent).toBe(2);
+    // A subset of the absent days, not an addition to them.
+    expect(summary.daysRecoverable).toBe(1);
+    // Granting a retake does not itself restore the percentage.
+    expect(summary.attendancePercentage).toBe(90);
+  });
+
+  // -- Window edges -------------------------------------------------------
+
+  it('freezes the denominator once the internship has ended', () => {
+    const summary = summariseSubmissions(
+      [
+        { submissionDate: '2026-08-03', status: 'approved' },
+        { submissionDate: '2026-08-04', status: 'approved' },
+        { submissionDate: '2026-08-05', status: 'approved' },
+        { submissionDate: '2026-08-06', status: 'approved' },
+        { submissionDate: '2026-08-07', status: 'approved' },
+      ],
+      // Two months after a one week internship.
+      { startDate: '2026-08-03', endDate: '2026-08-07', today: '2026-10-11', workingDays: MON_TO_FRI },
+    );
+
+    expect(summary.internshipDays).toBe(5);
+    expect(summary.elapsedDays).toBe(5);
+    expect(summary.daysAbsent).toBe(0);
+    expect(summary.attendancePercentage).toBe(100);
+  });
+
+  it('measures against elapsed days when no end date is recorded', () => {
+    const summary = summariseSubmissions(
+      [{ submissionDate: '2026-08-03', status: 'approved' }],
+      // Wednesday, with Tuesday missed and no known internship length.
+      { startDate: '2026-08-03', endDate: null, today: '2026-08-05', workingDays: MON_TO_FRI },
+    );
+
+    // Mon, Tue, Wed — today included, since the length is otherwise unknowable.
+    expect(summary.internshipDays).toBe(3);
+    expect(summary.daysAbsent).toBe(1);
+    expect(summary.attendancePercentage).toBe(66.7);
+  });
+
+  it('falls back to the first submission when the student has no start date', () => {
+    const summary = summariseSubmissions(
+      [{ submissionDate: '2026-08-10', status: 'approved' }],
+      { startDate: null, endDate: null, today: '2026-08-12', workingDays: MON_TO_FRI },
+    );
+
+    // Anchored on Monday the 10th: Mon, Tue, Wed.
+    expect(summary.internshipDays).toBe(3);
+    // Tuesday closed unanswered.
+    expect(summary.daysAbsent).toBe(1);
+    expect(summary.attendancePercentage).toBe(66.7);
+  });
+
+  it('never reports a negative percentage', () => {
+    const summary = summariseSubmissions(
+      [],
+      { startDate: '2026-08-03', endDate: null, today: '2026-08-07', workingDays: MON_TO_FRI },
+    );
+
+    expect(summary.daysAbsent).toBe(4);
+    expect(summary.attendancePercentage).toBe(20);
+    expect(summary.attendancePercentage).toBeGreaterThanOrEqual(0);
+  });
+
+  it('reports no percentage when there is nothing to measure', () => {
+    const summary = summariseSubmissions(
+      [],
+      { startDate: null, endDate: null, today: '2026-08-10', workingDays: MON_TO_FRI },
+    );
+
+    expect(summary.internshipDays).toBe(0);
+    expect(summary.attendancePercentage).toBeNull();
+  });
+
+  it('reports no percentage when the internship has not started', () => {
+    const summary = summariseSubmissions(
+      [],
+      { startDate: '2026-09-01', endDate: null, today: '2026-08-10', workingDays: MON_TO_FRI },
+    );
+
+    expect(summary.internshipDays).toBe(0);
+    expect(summary.attendancePercentage).toBeNull();
+  });
+
+  // -- Bookkeeping --------------------------------------------------------
+
+  it('carries the working days it measured against, for display', () => {
+    expect(summariseSubmissions([], fourWeeks('2026-08-05')).workingDays).toEqual(MON_TO_FRI);
+    expect(
+      summariseSubmissions([], fourWeeks('2026-08-05', MON_TO_SAT)).workingDays,
+    ).toEqual(MON_TO_SAT);
   });
 
   it('reports the first and last dates regardless of input order', () => {
@@ -276,6 +696,56 @@ describe('summariseSubmissions', () => {
     expect(summary.daysSubmitted).toBe(1);
     expect(summary.daysApproved).toBe(1);
     expect(summary.daysDeclined).toBe(0);
+  });
+
+  it('counts only declined days as absent when there is no window to compare against', () => {
+    const summary = summariseSubmissions([
+      { submissionDate: '2026-08-10', status: 'approved' },
+      { submissionDate: '2026-08-11', status: 'declined' },
+    ]);
+
+    // Never-answered days are undetectable with no calendar.
+    expect(summary.daysNotAnswered).toBe(0);
+    expect(summary.daysAbsent).toBe(1);
+    expect(summary.attendancePercentage).toBe(50);
+  });
+});
+
+describe('countInternshipDays', () => {
+  it('counts the working days between the start and end dates', () => {
+    expect(
+      countInternshipDays(
+        { startDate: '2026-08-03', endDate: '2026-08-28', today: '2026-08-05', workingDays: MON_TO_FRI },
+        null,
+      ),
+    ).toBe(20);
+  });
+
+  it('runs to today when no end date is recorded', () => {
+    expect(
+      countInternshipDays(
+        { startDate: '2026-08-03', endDate: null, today: '2026-08-03', workingDays: MON_TO_FRI },
+        null,
+      ),
+    ).toBe(1);
+  });
+
+  it('returns 0 when there is no start date and no submission to anchor on', () => {
+    expect(
+      countInternshipDays(
+        { startDate: null, endDate: null, today: '2026-08-10', workingDays: MON_TO_FRI },
+        null,
+      ),
+    ).toBe(0);
+  });
+
+  it('returns 0 when the internship has not started yet', () => {
+    expect(
+      countInternshipDays(
+        { startDate: '2026-09-01', endDate: null, today: '2026-08-10', workingDays: MON_TO_FRI },
+        null,
+      ),
+    ).toBe(0);
   });
 });
 

@@ -4,31 +4,23 @@
 
 import { useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { ListSkeleton } from '@/components/ui/SkeletonLoader';
 import { useStudentList } from '@/lib/api/hooks';
-import { colors, shadow, spacing } from '@/constants/theme';
-
-type Filter = 'all' | 'submitted' | 'missing';
-
-const FILTERS: { value: Filter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'missing', label: 'Not submitted' },
-  { value: 'submitted', label: 'Submitted' },
-];
+import { colors, shadow } from '@/constants/theme';
 
 export default function AdminStudentsScreen() {
   const insets = useSafeAreaInsets();
-  const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
 
+  // Search covers name, register number and department name; the backend matches
+  // all three, so one input is enough and no status filter is needed here.
   const { data, isLoading, isRefetching, refetch } = useStudentList({
     search: search.trim().length > 1 ? search.trim() : undefined,
-    submittedToday: filter === 'all' ? undefined : filter === 'submitted',
   });
 
   const items = data?.items ?? [];
@@ -55,9 +47,9 @@ export default function AdminStudentsScreen() {
                 style={styles.searchInput}
                 value={search}
                 onChangeText={setSearch}
-                placeholder="Search name or register number"
+                placeholder="Search by name, register number or department"
                 placeholderTextColor={colors.textFaint}
-                autoCapitalize="characters"
+                autoCapitalize="none"
                 autoCorrect={false}
               />
               {search.length > 0 && (
@@ -66,7 +58,6 @@ export default function AdminStudentsScreen() {
                 </Pressable>
               )}
             </View>
-            <ChipGroup options={FILTERS} value={filter} onChange={(next) => setFilter(next)} />
             {data ? (
               <Text style={styles.count}>
                 {data.pagination.total} student{data.pagination.total === 1 ? '' : 's'}
@@ -88,7 +79,7 @@ export default function AdminStudentsScreen() {
           )
         }
         renderItem={({ item }) => (
-          <View style={styles.card}>
+          <Pressable style={styles.card} onPress={() => router.push(`/(admin)/students/${item.id}`)}>
             <View style={styles.cardRow}>
               <View style={styles.avatarCircle}>
                 <Text style={styles.avatarText}>{item.name.charAt(0).toUpperCase()}</Text>
@@ -100,9 +91,16 @@ export default function AdminStudentsScreen() {
                   {item.section ? ` \u00b7 Sec ${item.section}` : ''}
                   {item.year ? ` \u00b7 Year ${item.year}` : ''}
                 </Text>
+                {item.departmentName ? (
+                  <Text style={styles.department} numberOfLines={1}>{item.departmentName}</Text>
+                ) : null}
+                {/* Percentage first, since that is what an admin scans for, then the
+                    days behind it. Absent is always printed, including as 0, so a clean
+                    record reads as a fact rather than as missing data. */}
                 <Text style={styles.meta}>
-                  {item.summary.daysApproved}/{item.summary.daysSubmitted} approved
-                  {item.summary.approvalPercentage !== null ? ` \u00b7 ${item.summary.approvalPercentage}%` : ''}
+                  {item.summary.attendancePercentage !== null
+                    ? `${item.summary.attendancePercentage}% \u00b7 ${item.summary.daysAbsent ?? 0} absent of ${item.summary.internshipDays} days`
+                    : 'Attendance not started'}
                 </Text>
               </View>
               <View style={styles.cardRight}>
@@ -113,9 +111,10 @@ export default function AdminStudentsScreen() {
                     <Text style={styles.missingText}>Not today</Text>
                   </View>
                 )}
+                <MaterialIcons name="chevron-right" size={20} color={colors.textFaint} />
               </View>
             </View>
-          </View>
+          </Pressable>
         )}
       />
     </View>
@@ -137,9 +136,10 @@ const styles = StyleSheet.create({
   avatarCircle: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#eceef8', alignItems: 'center', justifyContent: 'center' },
   avatarText: { fontSize: 15, fontWeight: '800', color: colors.primary },
   cardMain: { flex: 1 },
-  cardRight: { alignItems: 'flex-end' },
+  cardRight: { alignItems: 'flex-end', gap: 6 },
   name: { fontSize: 14, fontWeight: '700', color: colors.text },
   registerNumber: { fontSize: 11, color: colors.textMuted, fontVariant: ['tabular-nums'], marginTop: 1 },
+  department: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   meta: { fontSize: 11, color: colors.textMuted, marginTop: 3, fontVariant: ['tabular-nums'] },
   missingPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, backgroundColor: colors.surfaceAlt },
   missingText: { fontSize: 10, color: colors.textMuted, fontWeight: '700' },

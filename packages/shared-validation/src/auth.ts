@@ -9,7 +9,7 @@
 import { z } from 'zod';
 import { CLIENT_PLATFORMS, INTERNSHIP_DOMAINS, INTERNSHIP_MODES } from '@ims/shared-types';
 import { emailSchema, loginPasswordSchema, mobileSchema, passwordSchema, uuidSchema } from './common';
-import { registerNumberSchema } from './student';
+import { registerNumberSchema, workingDaysSchema } from './student';
 
 // ---------------------------------------------------------------------------
 // Faculty login (email + password via Supabase client)
@@ -54,6 +54,16 @@ export const studentRegisterSchema = z.object({
   section: z.string().trim().max(8).nullable().optional(),
   studentEmail: emailSchema,
   mobile: mobileSchema,
+
+  /**
+   * The weekdays this student's placement runs on, chosen on the registration form.
+   *
+   * Optional so an older build of the app can still register a student — the column
+   * default (Mon-Fri) applies. Sending it is strongly preferred: attendance is measured
+   * against these days, and a six-day placement left on the default would be marked
+   * absent for every Saturday of the internship.
+   */
+  workingDays: workingDaysSchema.optional(),
 
   // Internship details
   organisationName: z.string().trim().min(2, { message: 'Organisation name is required.' }).max(200),

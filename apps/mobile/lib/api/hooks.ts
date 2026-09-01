@@ -19,8 +19,10 @@ import type {
   DashboardResponse,
   Department,
   DocumentMeta,
+  MissedDay,
   Pagination,
   Question,
+  RetakeInfo,
   Student,
   StudentListItem,
   SubmissionStatus,
@@ -28,6 +30,7 @@ import type {
 } from '@ims/shared-types';
 import type {
   CreateQuestionInput,
+  GrantRetakeInput,
   ReviewSubmissionInput,
   UpdateQuestionInput,
   UpdateStudentProfileInput,
@@ -39,10 +42,23 @@ import { queryKeys } from './queryKeys';
 // Dashboard
 // ---------------------------------------------------------------------------
 
+/**
+ * Poll interval for screens that show counters other people change.
+ *
+ * 15s is a compromise: fast enough that a reviewer approving a submission shows up
+ * on the admin's screen while they are still looking at it, slow enough that an
+ * idle dashboard costs four requests a minute. Polling stops while the app is
+ * backgrounded — see the AppState wiring in `app/_layout.tsx`.
+ */
+export const LIVE_REFETCH_INTERVAL_MS = 15_000;
+
 export function useDashboard(options?: Partial<UseQueryOptions<DashboardResponse>>) {
   return useQuery({
     queryKey: queryKeys.dashboard,
     queryFn: () => api.get<DashboardResponse>('/dashboard'),
+    // Every number here is a live aggregate of what students and reviewers are
+    // doing right now, so it refreshes on its own rather than waiting for a pull.
+    refetchInterval: LIVE_REFETCH_INTERVAL_MS,
     ...options,
   });
 }
@@ -52,14 +68,22 @@ export function useDashboard(options?: Partial<UseQueryOptions<DashboardResponse
 // ---------------------------------------------------------------------------
 
 /**
- * `date` is passed explicitly so the key changes when the student looks at another
- * day. Kept short-lived: whether today is still open can change while the app is
- * open, and a stale "you can still submit" is the one thing worth a refetch.
+ * The student's form for one day.
+ *
+ * Omitting `date` is not the same as passing today's: it sends no date at all and
+ * lets the server resolve "today" on the institution clock. That matters because the
+ * device's own date is read in UTC, so between midnight and 05:30 IST it names
+ * yesterday — and asking for yesterday returns a closed form. A date is passed
+ * explicitly only when the student is deliberately looking at another day, such as a
+ * granted retake.
+ *
+ * Kept short-lived: whether a day is still open can change while the app is open, and
+ * a stale "you can still submit" is the one thing worth a refetch.
  */
-export function useTodayForm(date: string) {
+export function useTodayForm(date?: string) {
   return useQuery({
-    queryKey: queryKeys.submissions.today(date),
-    queryFn: () => api.get<TodayForm>('/submissions/today', { date }),
+    queryKey: queryKeys.submissions.today(date ?? 'server-today'),
+    queryFn: () => api.get<TodayForm>('/submissions/today', date ? { date } : undefined),
   });
 }
 
@@ -152,6 +176,68 @@ export function useBulkReview() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
       void queryClient.invalidateQueries({ queryKey: queryKeys.students.all });
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Retakes
+// ---------------------------------------------------------------------------
+
+/**
+ * Retake grants in scope. A student always gets only their own, whatever they ask
+ * for — the server pins that, so no filter is needed here.
+ */
+export function useRetakes(filters: { studentId?: string; includeInactive?: boolean } = {}) {
+  return useQuery({
+    queryKey: queryKeys.retakes.list(filters),
+    queryFn: () =>
+      api.get<RetakeInfo[]>('/retakes', {
+        studentId: filters.studentId,
+        includeInactive: filters.includeInactive,
+      }),
+  });
+}
+
+/**
+ * The days a reviewer could reopen for one student: every elapsed internship day
+ * not counted present, newest first.
+ */
+export function useMissedDays(studentId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.retakes.missedDays(studentId ?? 'none'),
+    enabled: Boolean(studentId),
+    queryFn: () => api.get<MissedDay[]>(`/students/${studentId}/missed-days`),
+  });
+}
+
+/**
+ * Every retake write invalidates the submission and student trees as well as the
+ * retake list. Reopening a day changes what the student's form will accept and, once
+ * they answer and it is approved, their attendance percentage in the directory — so
+ * the same trio the review mutations invalidate applies here.
+ */
+function invalidateAfterRetakeChange(queryClient: ReturnType<typeof useQueryClient>): void {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.retakes.all });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.submissions.all });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.students.all });
+}
+
+export function useGrantRetake() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: GrantRetakeInput) => api.post<RetakeInfo>('/retakes', input),
+    onSuccess: () => invalidateAfterRetakeChange(queryClient),
+  });
+}
+
+export function useRevokeRetake() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (retakeId: string) => api.delete<RetakeInfo>(`/retakes/${retakeId}`),
+    onSuccess: () => invalidateAfterRetakeChange(queryClient),
   });
 }
 

@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -27,13 +27,24 @@ import { DocumentViewer } from '@/components/ui/DocumentViewer';
 import { api, ApiError } from '@/lib/api/client';
 import { useSubmitAnswers, useTodayForm } from '@/lib/api/hooks';
 import { uploadFile, validateFile, type PickedFile } from '@/lib/api/upload';
+import { formatLongDate } from '@/lib/utils/dates';
 import { colors, fontSize, radius, shadow, spacing } from '@/constants/theme';
 
 export default function AnswerScreen() {
   const insets = useSafeAreaInsets();
-  // The server owns what "today" is; asking for it without a date gets that answer.
-  const todayKey = new Date().toISOString().slice(0, 10);
-  const { data: form, isLoading, isRefetching, error, refetch } = useTodayForm(todayKey);
+
+  /**
+   * A `date` param means the student opened a specific past day — currently only ever
+   * a granted retake. Without it no date is sent at all, so the server resolves today
+   * on the institution clock rather than the device's, which reads UTC and names
+   * yesterday between midnight and 05:30 IST.
+   */
+  const params = useLocalSearchParams<{ date?: string }>();
+  const requestedDate = typeof params.date === 'string' && params.date.length > 0
+    ? params.date
+    : undefined;
+
+  const { data: form, isLoading, isRefetching, error, refetch } = useTodayForm(requestedDate);
 
   const submit = useSubmitAnswers();
 
@@ -87,6 +98,17 @@ export default function AnswerScreen() {
   }, [form?.submission]);
 
   const questions = form?.questions ?? [];
+
+  /**
+   * A reopened day must not be titled "Today's Questions" — the student is answering
+   * for a date that has passed, and the answers get recorded against that date.
+   */
+  const isRetake = Boolean(form?.retake);
+  const headerTitle = isRetake
+    ? 'Retake questions'
+    : requestedDate
+      ? 'Questions'
+      : "Today's Questions";
 
   /** Local validation mirrors the server's, so errors appear before a round trip. */
   const localErrors = useMemo(() => {
@@ -182,6 +204,9 @@ export default function AnswerScreen() {
 
     try {
       await submit.mutateAsync({
+        // The server's own resolved date, not the device's. Sending it back is what
+        // makes a retake land on the reopened day instead of on today.
+        date: form?.date,
         answers: payload,
         ...(documentIds.length > 0 ? { documentIds } : {}),
       });
@@ -213,7 +238,7 @@ export default function AnswerScreen() {
           <Pressable onPress={() => router.back()} style={styles.backBtn}>
             <MaterialIcons name="arrow-back" size={22} color="#fff" />
           </Pressable>
-          <Text style={styles.headerTitle}>Today's Questions</Text>
+          <Text style={styles.headerTitle}>{headerTitle}</Text>
         </LinearGradient>
         <View style={styles.errorCard}>
           <MaterialIcons name="error-outline" size={36} color={colors.danger} />
@@ -234,8 +259,12 @@ export default function AnswerScreen() {
             <MaterialIcons name="arrow-back" size={22} color="#fff" />
           </Pressable>
           <View style={{ flex: 1 }}>
-            <Text style={styles.headerTitle}>Today's Questions</Text>
-            <Text style={styles.headerSubtitle}>{questions.length} question{questions.length === 1 ? '' : 's'} to answer</Text>
+            <Text style={styles.headerTitle}>{headerTitle}</Text>
+            <Text style={styles.headerSubtitle}>
+              {isRetake ? `For ${formatLongDate(form.date)}` : null}
+              {isRetake ? ' \u00b7 ' : null}
+              {questions.length} question{questions.length === 1 ? '' : 's'} to answer
+            </Text>
           </View>
         </View>
       </LinearGradient>
@@ -260,6 +289,42 @@ export default function AnswerScreen() {
               </View>
             </View>
           ) : null}
+        </View>
+      ) : null}
+
+      {/* ---- Retake notice ----
+          A day that closed and then reopened needs saying so explicitly. Without
+          this the student cannot tell a second chance from a deadline that never
+          existed, and would not know it has its own expiry. */}
+      {form.retake ? (
+        <View style={[styles.retakeBox, !form.retake.isActive && styles.retakeBoxExpired]}>
+          <MaterialIcons
+            name={form.retake.isActive ? 'event-available' : 'event-busy'}
+            size={18}
+            color={form.retake.isActive ? colors.primary : colors.textMuted}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.retakeTitle}>
+              {form.retake.isActive
+                ? `Retake open for ${formatLongDate(form.retake.targetDate)}`
+                : `Retake for ${formatLongDate(form.retake.targetDate)} has ended`}
+            </Text>
+            <Text style={styles.retakeBody}>
+              {form.retake.isActive
+                ? `Answer by ${formatLongDate(form.retake.expiresOn)} and this day counts as present once approved.`
+                : form.retake.revokedAt
+                  ? 'Your faculty withdrew this retake.'
+                  : `The deadline was ${formatLongDate(form.retake.expiresOn)}.`}
+            </Text>
+            {form.retake.reason ? (
+              <Text style={styles.retakeReason}>
+                {form.retake.grantedByName
+                  ? `${form.retake.grantedByName}: `
+                  : ''}
+                {form.retake.reason}
+              </Text>
+            ) : null}
+          </View>
         </View>
       ) : null}
 
@@ -567,6 +632,27 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   lockedText: { flex: 1, fontSize: fontSize.small, color: colors.text, lineHeight: 19 },
+  retakeBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    backgroundColor: colors.infoBg,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary,
+  },
+  retakeBoxExpired: { backgroundColor: colors.surfaceAlt, borderLeftColor: colors.textFaint },
+  retakeTitle: { fontSize: fontSize.small, fontWeight: '700', color: colors.text },
+  retakeBody: { fontSize: fontSize.small, color: colors.textMuted, lineHeight: 19, marginTop: 2 },
+  retakeReason: {
+    fontSize: fontSize.caption,
+    color: colors.textMuted,
+    lineHeight: 17,
+    marginTop: 6,
+    fontStyle: 'italic',
+  },
   uploadedFileRow: {
     flexDirection: 'row',
     alignItems: 'center',
