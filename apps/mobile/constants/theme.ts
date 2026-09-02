@@ -87,3 +87,24 @@ export const shadow = {
     elevation: 2,
   },
 } as const;
+
+/**
+ * Motion tokens.
+ *
+ * Navigation transitions and in-page entrances read their timing from here, so the whole
+ * app moves at one speed. Two screens animating at 200ms and 400ms is what makes an app
+ * feel unfinished even when each screen looks right on its own.
+ *
+ * The durations are deliberately short. A transition long enough to admire is a
+ * transition the user waits through every single time they tap.
+ */
+export const motion = {
+  /** Pushing a detail screen over a list. Long enough to read as movement. */
+  push: 260,
+  /** Cross-fades: switching role area after login, or swapping a tab. */
+  fade: 200,
+  /** Content settling in after a screen mounts. */
+  enter: 300,
+  /** How far content rises as it fades in, in points. Small on purpose. */
+  enterOffset: 10,
+} as const;

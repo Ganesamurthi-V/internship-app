@@ -12,6 +12,7 @@ import { StudentDashboardSkeleton } from '@/components/ui/SkeletonLoader';
 import { useDashboard } from '@/lib/api/hooks';
 import { useAuthStore } from '@/stores/authStore';
 import { describeWorkingDays } from '@ims/shared-types';
+import { FadeInView } from '@/components/ui/FadeInView';
 import { describeDaysUntil, formatLongDate, formatShortDate } from '@/lib/utils/dates';
 import { colors, fontSize, radius, shadow, spacing } from '@/constants/theme';
 
@@ -58,7 +59,9 @@ export default function StudentDashboardScreen() {
   const noQuestions = today.questionCount === 0;
 
   return (
-    <View style={styles.container}>
+    // Wraps the loaded state only, so the entrance plays when the dashboard actually has
+    // something to show rather than while the skeleton is still up.
+    <FadeInView style={styles.container}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} tintColor={colors.primary} />}
@@ -280,7 +283,7 @@ export default function StudentDashboardScreen() {
           )}
         </View>
       </ScrollView>
-    </View>
+    </FadeInView>
   );
 }
 

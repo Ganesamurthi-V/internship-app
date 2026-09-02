@@ -20,6 +20,15 @@ export default function StudentLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
+        /**
+         * Bottom tabs swap instantly by default, which is the single biggest reason moving
+         * around the app felt abrupt. `shift` cross-fades and nudges the outgoing screen,
+         * so a tab change reads as one surface replacing another.
+         */
+        animation: 'shift',
+        // Keeps the app background under the animating screens, so the cross-fade never
+        // passes through white.
+        sceneStyle: { backgroundColor: colors.background },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,
         tabBarLabelStyle: {

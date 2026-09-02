@@ -11,16 +11,38 @@
  */
 
 import { useEffect } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, LogBox, type AppStateStatus } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { colors } from '@/constants/theme';
+import { colors, motion } from '@/constants/theme';
 import { useAuthStore } from '@/stores/authStore';
 
 void SplashScreen.preventAutoHideAsync();
+
+/**
+ * Silences one deprecation notice raised by dependencies, not by this app.
+ *
+ * React Native 0.86 deprecated `InteractionManager`. Two installed packages still call it,
+ * and neither call site is ours:
+ *
+ *   - `expo-router`, in its vendored copy of the React Navigation stack card, on every
+ *     screen transition. Still present in 57.0.18, the newest build for SDK 57.
+ *   - `react-native-draggable-flatlist`, when a reordered list's data changes.
+ *
+ * It fires on more or less every navigation, which buries the warnings that *are* worth
+ * reading. Matched on the exact opening phrase rather than a broad pattern, so it hides
+ * this notice and nothing else, and only in development — LogBox does not run in release
+ * builds.
+ *
+ * Remove this once both packages drop the call. Nothing in the app depends on it, so
+ * deleting it is always safe: the worst case is the noise returns.
+ */
+if (__DEV__) {
+  LogBox.ignoreLogs(['InteractionManager has been deprecated']);
+}
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -96,20 +118,32 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
         <StatusBar style="light" />
+        {/*
+          Every screen here is a whole role area, reached by replacing the stack rather
+          than pushing onto it — logging in, logging out, being redirected by role. So they
+          cross-fade instead of sliding: a slide implies "forward, and back again", which is
+          not what any of these transitions are.
+
+          `contentStyle` carries the app background so the fade happens between two
+          coloured screens. Without it the transition passes through the default white,
+          which is the flash that makes a switch feel like a jolt rather than a movement.
+        */}
         <Stack
           screenOptions={{
             headerStyle: { backgroundColor: colors.primary },
             headerTintColor: colors.onPrimary,
             headerTitleStyle: { fontWeight: '600' },
             contentStyle: { backgroundColor: colors.background },
+            headerShown: false,
+            animation: 'fade',
+            animationDuration: motion.fade,
           }}
         >
-          <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-          <Stack.Screen name="(student)" options={{ headerShown: false }} />
-          <Stack.Screen name="(faculty)" options={{ headerShown: false }} />
-          <Stack.Screen name="(admin)" options={{ headerShown: false }} />
-
+          <Stack.Screen name="index" />
+          <Stack.Screen name="(auth)" />
+          <Stack.Screen name="(student)" />
+          <Stack.Screen name="(faculty)" />
+          <Stack.Screen name="(admin)" />
         </Stack>
       </QueryClientProvider>
     </SafeAreaProvider>
