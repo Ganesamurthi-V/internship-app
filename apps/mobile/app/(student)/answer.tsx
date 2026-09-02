@@ -9,8 +9,9 @@
  * wrong clock must not be able to reopen a closed day.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import type { LayoutChangeEvent } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -55,6 +56,20 @@ export default function AnswerScreen() {
   const [uploading, setUploading] = useState(false);
   /** Maps questionId → uploaded file metadata for file_upload type questions */
   const [uploadedFileMap, setUploadedFileMap] = useState<Record<string, DocumentMeta>>({});
+
+  /**
+   * Whether submit has been pressed on an incomplete form.
+   *
+   * Per-question errors stay hidden until this flips, because validating live would put
+   * "Write at least 30 words" under the box on the first keystroke of every answer. The
+   * live word counter is the feedback while typing; these messages are the feedback on
+   * trying to submit.
+   */
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+
+  /** Lets a failed submit jump the student to the first question that needs work. */
+  const scrollRef = useRef<ScrollView>(null);
+  const questionOffsets = useRef<Record<string, number>>({});
 
   const [docViewerUrl, setDocViewerUrl] = useState('');
   const [docViewerName, setDocViewerName] = useState('');
@@ -134,9 +149,34 @@ export default function AnswerScreen() {
     return errors;
   }, [questions, answers]);
 
-  const hasBlockingErrors = questions.some(
-    (question) => question.required && (localErrors[question.id] || !answers[question.id]?.trim()),
+  /**
+   * Questions that would be rejected, in the order they appear on screen.
+   *
+   * Keyed off `localErrors` alone rather than also testing `required` separately: the
+   * validator already reports a blank required answer as an error, and going through it
+   * means an *optional* answer that breaks a rule — 300 words in a 200-word box — blocks
+   * submission too. The previous check only looked at required questions, so that case
+   * passed locally and was rejected by the server instead.
+   */
+  const problemQuestions = useMemo(
+    () => questions.filter((question) => localErrors[question.id] !== undefined),
+    [questions, localErrors],
   );
+
+  /** 1-based positions, for naming the offending questions in the summary. */
+  const questionNumbers = useMemo(() => {
+    const numbers = new Map<string, number>();
+    questions.forEach((question, index) => numbers.set(question.id, index + 1));
+    return numbers;
+  }, [questions]);
+
+  const scrollToQuestion = (questionId: string): void => {
+    const offset = questionOffsets.current[questionId];
+    if (offset === undefined) return;
+    // A little above the card, so its number and prompt are both in view rather than the
+    // card starting exactly at the top edge.
+    scrollRef.current?.scrollTo({ y: Math.max(0, offset - 16), animated: true });
+  };
 
   /** Handles file pick for a file_upload type question */
   const onPickFileForQuestion = async (questionId: string): Promise<void> => {
@@ -182,9 +222,25 @@ export default function AnswerScreen() {
     setFormError(null);
     setFieldErrors({});
 
-    if (Object.keys(localErrors).length > 0) {
-      setFieldErrors(localErrors);
-      setFormError('Some answers need attention.');
+    // Reveals the per-question messages and the highlight. Set before the check so a
+    // failed attempt marks the form even though it returns early.
+    setSubmitAttempted(true);
+
+    if (problemQuestions.length > 0) {
+      const unanswered = problemQuestions.filter(
+        (question) => (answers[question.id] ?? '').trim().length === 0,
+      ).length;
+
+      setFormError(
+        unanswered === problemQuestions.length
+          ? `${unanswered} question${unanswered === 1 ? '' : 's'} still ${unanswered === 1 ? 'needs' : 'need'} an answer.`
+          : `${problemQuestions.length} question${problemQuestions.length === 1 ? '' : 's'} need${problemQuestions.length === 1 ? 's' : ''} your attention.`,
+      );
+
+      // Jumping to the first one is the point: on a long form the offending question can
+      // be well off screen, and a message by the button alone does not say which.
+      const first = problemQuestions[0];
+      if (first) scrollToQuestion(first.id);
       return;
     }
 
@@ -271,7 +327,7 @@ export default function AnswerScreen() {
       </LinearGradient>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} tintColor={colors.primary} />}
       >
       {/* ---- Existing decision, if any ---- */}
@@ -308,14 +364,18 @@ export default function AnswerScreen() {
             <Text style={styles.retakeTitle}>
               {form.retake.isActive
                 ? `Retake open for ${formatLongDate(form.retake.targetDate)}`
-                : `Retake for ${formatLongDate(form.retake.targetDate)} has ended`}
+                : form.retake.usedAt
+                  ? `Retake for ${formatLongDate(form.retake.targetDate)} already used`
+                  : `Retake for ${formatLongDate(form.retake.targetDate)} has ended`}
             </Text>
             <Text style={styles.retakeBody}>
               {form.retake.isActive
-                ? `Answer by ${formatLongDate(form.retake.expiresOn)} and this day counts as present once approved.`
+                ? `You get one attempt. Answer by ${formatLongDate(form.retake.expiresOn)} and this day counts as present once approved.`
                 : form.retake.revokedAt
                   ? 'Your faculty withdrew this retake.'
-                  : `The deadline was ${formatLongDate(form.retake.expiresOn)}.`}
+                  : form.retake.usedAt
+                    ? 'You have already used your retake for this day.'
+                    : `The deadline was ${formatLongDate(form.retake.expiresOn)}.`}
             </Text>
             {form.retake.reason ? (
               <Text style={styles.retakeReason}>
@@ -344,8 +404,14 @@ export default function AnswerScreen() {
           index={index + 1}
           question={question}
           value={answers[question.id] ?? ''}
-          error={fieldErrors[question.id]}
+          // A server error always wins; the local message appears only once submit has
+          // been attempted, so the form does not scold the student as they type.
+          error={fieldErrors[question.id] ?? (submitAttempted ? localErrors[question.id] : undefined)}
+          highlight={submitAttempted && localErrors[question.id] !== undefined}
           editable={form.canSubmit}
+          onLayout={(y) => {
+            questionOffsets.current[question.id] = y;
+          }}
           onChange={(value) => {
             if (value === '__pick_file__') {
               void onPickFileForQuestion(question.id);
@@ -361,21 +427,54 @@ export default function AnswerScreen() {
       {/* ---- Submit ---- */}
       {form.canSubmit ? (
         <View style={styles.card}>
-          {formError ? (
+          {/* Summary of what is outstanding, shown only after a failed attempt.
+              Each number is tappable: on a long form, telling the student that question 4
+              is unanswered is far less useful than taking them to it. */}
+          {submitAttempted && problemQuestions.length > 0 ? (
+            <View style={styles.problemBox} accessibilityLiveRegion="polite">
+              <View style={styles.problemHeader}>
+                <MaterialIcons name="error-outline" size={18} color={colors.danger} />
+                <Text style={styles.problemTitle}>
+                  {formError ?? 'Some answers need attention.'}
+                </Text>
+              </View>
+
+              <View style={styles.problemChips}>
+                {problemQuestions.map((question) => {
+                  const number = questionNumbers.get(question.id) ?? 0;
+                  const blank = (answers[question.id] ?? '').trim().length === 0;
+                  return (
+                    <Pressable
+                      key={question.id}
+                      style={styles.problemChip}
+                      onPress={() => scrollToQuestion(question.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Go to question ${number}, ${blank ? 'not answered' : 'needs attention'}`}
+                    >
+                      <Text style={styles.problemChipText}>
+                        Q{number} {blank ? '\u00b7 not answered' : '\u00b7 check'}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          ) : formError ? (
             <View accessibilityLiveRegion="polite">
               <Text style={styles.formError}>{formError}</Text>
               <View style={styles.spacer} />
             </View>
           ) : null}
 
+          {/* Deliberately never disabled for incomplete answers. A dead button explains
+              nothing — pressing it is how the student finds out what is missing. */}
           <Button
             label={form.submission ? 'Resubmit answers' : 'Submit answers'}
             onPress={() => void onSubmit()}
             loading={submit.isPending}
-            disabled={hasBlockingErrors}
           />
 
-          {hasBlockingErrors ? (
+          {problemQuestions.length > 0 && !submitAttempted ? (
             <Text style={styles.hint}>Answer every required question to submit.</Text>
           ) : null}
         </View>
@@ -400,8 +499,10 @@ function QuestionField({
   question,
   value,
   error,
+  highlight = false,
   editable,
   onChange,
+  onLayout,
   uploadedFiles,
   onViewFile,
 }: {
@@ -409,11 +510,20 @@ function QuestionField({
   question: Question;
   value: string;
   error: string | undefined;
+  /** Draws attention to a question a failed submit is waiting on. */
+  highlight?: boolean;
   editable: boolean;
   onChange: (value: string) => void;
+  /** Reports this card's vertical offset so a failed submit can scroll to it. */
+  onLayout?: (y: number) => void;
   uploadedFiles: Record<string, DocumentMeta>;
   onViewFile: (file: DocumentMeta) => void;
 }) {
+  /** Both render paths below share this, so the highlight cannot apply to only one type. */
+  const cardStyle = [styles.card, highlight ? styles.cardProblem : null];
+  const reportLayout = onLayout
+    ? (event: LayoutChangeEvent) => onLayout(event.nativeEvent.layout.y)
+    : undefined;
   /**
    * Live word count for free-text answers.
    *
@@ -456,7 +566,7 @@ function QuestionField({
   if (question.type === 'file_upload') {
     const fileInfo = uploadedFiles[question.id];
     return (
-      <View style={styles.card}>
+      <View style={cardStyle} onLayout={reportLayout}>
         <Text style={styles.questionPrompt}>
           {index}. {question.prompt}
           {question.required ? <Text style={styles.required}> *</Text> : null}
@@ -535,7 +645,7 @@ function QuestionField({
 
   if (question.type === 'choice') {
     return (
-      <View style={styles.card}>
+      <View style={cardStyle} onLayout={reportLayout}>
         <Text style={styles.questionPrompt}>
           {index}. {question.prompt}
           {question.required ? <Text style={styles.required}> *</Text> : null}
@@ -554,7 +664,7 @@ function QuestionField({
   }
 
   return (
-    <View style={styles.card}>
+    <View style={cardStyle} onLayout={reportLayout}>
       <Text style={styles.questionPrompt}>
         {index}. {question.prompt}
         {question.required ? <Text style={styles.required}> *</Text> : null}
@@ -605,6 +715,17 @@ const styles = StyleSheet.create({
   backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#ffffff20', alignItems: 'center', justifyContent: 'center' },
   content: { padding: 16, paddingBottom: 100, gap: 12 },
   card: { backgroundColor: '#fff', borderRadius: 14, padding: 16, ...shadow.card },
+  /**
+   * A question a failed submit is waiting on.
+   *
+   * A left bar plus a tinted background rather than colour alone, so the marked questions
+   * are distinguishable without relying on colour vision.
+   */
+  cardProblem: {
+    backgroundColor: colors.dangerBg,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.danger,
+  },
   errorCard: { margin: 20, padding: 24, backgroundColor: '#fff', borderRadius: 14, alignItems: 'center', gap: 12 },
   errorText: { fontSize: 14, color: colors.textMuted, textAlign: 'center' },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
@@ -628,6 +749,27 @@ const styles = StyleSheet.create({
   counterOver: { color: colors.danger, fontWeight: '700' },
   fieldError: { marginTop: spacing.sm, fontSize: fontSize.small, color: colors.danger },
   formError: { fontSize: fontSize.small, color: colors.danger, fontWeight: '600' },
+
+  // Outstanding-question summary above the submit button.
+  problemBox: {
+    backgroundColor: colors.dangerBg,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  problemHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  problemTitle: { flex: 1, fontSize: fontSize.small, fontWeight: '700', color: colors.danger },
+  problemChips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  problemChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.danger,
+  },
+  problemChipText: { fontSize: fontSize.caption, fontWeight: '700', color: colors.danger },
   hint: {
     marginTop: spacing.sm,
     fontSize: fontSize.caption,

@@ -73,6 +73,11 @@ type RetakeRow = Prisma.RetakeGrantGetPayload<{ select: typeof retakeSelect }>;
 /**
  * `isActive` is computed against the server's clock rather than stored, so a grant
  * cannot be "active" merely because no job has run to expire it.
+ *
+ * A retake is ONE attempt. `usedAt` therefore ends it just as surely as the deadline
+ * does: the day closes again the moment the student submits under it. If that answer is
+ * then declined, the way back is a fresh grant, which the decline flow offers the
+ * reviewer — not an unlimited right to keep editing a day that already closed.
  */
 function serializeRetake(row: RetakeRow, currentDate: string): RetakeInfo {
   const expiresOn = toDateOnly(row.expiresOn);
@@ -88,7 +93,22 @@ function serializeRetake(row: RetakeRow, currentDate: string): RetakeInfo {
     expiresOn,
     usedAt: toIso(row.usedAt),
     revokedAt: toIso(row.revokedAt),
-    isActive: row.revokedAt === null && expiresOn >= currentDate,
+    isActive: row.revokedAt === null && row.usedAt === null && expiresOn >= currentDate,
+  };
+}
+
+/**
+ * Prisma predicate for a grant that can still be used.
+ *
+ * Written once and reused by every "what can this student do now" query, because three
+ * separate hand-rolled copies of the same three conditions is how one of them ends up
+ * missing `usedAt` and quietly hands out a second attempt.
+ */
+function usableRetakeFilter(currentDate: string): Prisma.RetakeGrantWhereInput {
+  return {
+    revokedAt: null,
+    usedAt: null,
+    expiresOn: { gte: toDateColumn(currentDate) },
   };
 }
 
@@ -99,15 +119,10 @@ function serializeRetake(row: RetakeRow, currentDate: string): RetakeInfo {
 /**
  * The grant covering `date` for `studentId`, active or not.
  *
- * Returns revoked and expired grants too, with `isActive: false`. The student's form
- * needs them: "your retake for this day expired on the 9th" is an answer, whereas
+ * Returns spent, revoked and expired grants too, with `isActive: false`. The student's
+ * form needs them: "you have already used your retake for this day" is an answer, whereas
  * dropping the row and falling back to the generic "this day has closed" leaves them
- * unable to tell a retake they never had from one they let lapse.
- *
- * `isActive` means granted, not revoked, and still inside its deadline. `usedAt` is
- * deliberately not part of that test: a retake that was submitted and then declined
- * has to stay fixable, and consuming the grant on first use would trap the student
- * with a declined answer they cannot replace. The deadline is what ends it.
+ * unable to tell a retake they never had from one they have already spent.
  */
 export async function getRetakeForDate(
   studentId: string,
@@ -123,10 +138,11 @@ export async function getRetakeForDate(
 }
 
 /**
- * Records that a submission was made under a grant.
+ * Spends the grant.
  *
- * Only the first use is stamped: `usedAt` answers "when did the student act on
- * this", and overwriting it on every resubmission would lose that.
+ * This is what makes a retake a single attempt: stamping `usedAt` takes it out of every
+ * "usable" query and closes the day again. Conditional on `usedAt: null` so the stamp —
+ * and the audit row recording it — happens exactly once even if two requests race.
  */
 export async function markRetakeUsed(
   retakeId: string,
@@ -243,6 +259,10 @@ export async function grantRetake(
       // Re-granting a revoked day restores it rather than leaving a row that reads
       // active but tests as revoked.
       revokedAt: null,
+      // And re-granting a SPENT day resets the attempt. Without this the new grant would
+      // be born inactive — `usedAt` from the previous attempt would still be set — so a
+      // reviewer allowing a second try would appear to succeed and change nothing.
+      usedAt: null,
     },
     select: retakeSelect,
   });
@@ -346,9 +366,7 @@ export async function listRetakes(
       student: {
         AND: [scope, ...(query.studentId ? [{ id: query.studentId }] : [])],
       },
-      ...(query.includeInactive
-        ? {}
-        : { revokedAt: null, expiresOn: { gte: toDateColumn(currentDate) } }),
+      ...(query.includeInactive ? {} : usableRetakeFilter(currentDate)),
     },
     orderBy: [{ expiresOn: 'asc' }, { targetDate: 'desc' }],
     select: retakeSelect,
@@ -357,22 +375,50 @@ export async function listRetakes(
   return rows.map((row) => serializeRetake(row, currentDate));
 }
 
-/** The active grants for one student, soonest deadline first. For the dashboard. */
+/**
+ * The grants one student can still act on, soonest deadline first. For the dashboard.
+ *
+ * Excludes spent grants, so a retake the student has already answered stops appearing as
+ * something to do.
+ */
 export async function listActiveRetakesForStudent(
   studentId: string,
   currentDate: string = today(),
 ): Promise<RetakeInfo[]> {
   const rows = await prisma.retakeGrant.findMany({
-    where: {
-      studentId,
-      revokedAt: null,
-      expiresOn: { gte: toDateColumn(currentDate) },
-    },
+    where: { studentId, ...usableRetakeFilter(currentDate) },
     orderBy: [{ expiresOn: 'asc' }, { targetDate: 'desc' }],
     select: retakeSelect,
   });
 
   return rows.map((row) => serializeRetake(row, currentDate));
+}
+
+/**
+ * Dates with a usable grant, for the attendance summary's `daysRecoverable`.
+ *
+ * Exported so the attendance code cannot drift from the definition of "usable" used
+ * everywhere else — it previously built the same predicate by hand.
+ */
+export async function listUsableRetakeDates(
+  studentIds: readonly string[],
+  currentDate: string = today(),
+): Promise<Map<string, string[]>> {
+  const byStudent = new Map<string, string[]>();
+  if (studentIds.length === 0) return byStudent;
+
+  const rows = await prisma.retakeGrant.findMany({
+    where: { studentId: { in: [...studentIds] }, ...usableRetakeFilter(currentDate) },
+    select: { studentId: true, targetDate: true },
+  });
+
+  for (const row of rows) {
+    const list = byStudent.get(row.studentId) ?? [];
+    list.push(toDateOnly(row.targetDate));
+    byStudent.set(row.studentId, list);
+  }
+
+  return byStudent;
 }
 
 // ---------------------------------------------------------------------------

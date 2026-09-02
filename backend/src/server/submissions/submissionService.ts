@@ -40,7 +40,12 @@ import { recordAudit } from '@/lib/audit';
 import type { AuthContext } from '@/lib/auth/context';
 import { isReviewer, submissionScopeFilter } from '@/lib/auth/guards';
 import { listActiveQuestions } from '@/server/questions/questionService';
-import { getRetakeForDate, markRetakeUsed } from '@/server/retakes/retakeService';
+import {
+  getRetakeForDate,
+  grantRetake,
+  listUsableRetakeDates,
+  markRetakeUsed,
+} from '@/server/retakes/retakeService';
 
 /**
  * Guards the derivation of document ids from file answers. A `file_upload` answer
@@ -472,7 +477,7 @@ function resolveWorkingDays(stored: number[] | null | undefined): number[] {
 export async function getAttendanceSummary(studentId: string): Promise<AttendanceSummary> {
   const currentDate = today();
 
-  const [student, rows, retakes] = await Promise.all([
+  const [student, rows, retakeDates] = await Promise.all([
     prisma.student.findUnique({
       where: { id: studentId },
       select: { startDate: true, endDate: true, workingDays: true },
@@ -481,14 +486,7 @@ export async function getAttendanceSummary(studentId: string): Promise<Attendanc
       where: { studentId },
       select: { submissionDate: true, status: true },
     }),
-    prisma.retakeGrant.findMany({
-      where: {
-        studentId,
-        revokedAt: null,
-        expiresOn: { gte: toDateColumn(currentDate) },
-      },
-      select: { targetDate: true },
-    }),
+    listUsableRetakeDates([studentId], currentDate),
   ]);
 
   return summariseSubmissions(
@@ -501,7 +499,7 @@ export async function getAttendanceSummary(studentId: string): Promise<Attendanc
       endDate: student?.endDate ? fromDateColumn(student.endDate) : null,
       today: currentDate,
       workingDays: resolveWorkingDays(student?.workingDays),
-      retakeOpenDates: retakes.map((row) => fromDateColumn(row.targetDate)),
+      retakeOpenDates: retakeDates.get(studentId) ?? [],
     },
   );
 }
@@ -517,8 +515,8 @@ export async function getAttendanceSummaries(
   const currentDate = today();
 
   // Three batched queries rather than three per student: the internship windows, the
-  // submissions and the open retakes, then joined in memory.
-  const [students, rows, retakes] = await Promise.all([
+  // submissions and the usable retakes, then joined in memory.
+  const [students, rows, retakesByStudent] = await Promise.all([
     prisma.student.findMany({
       where: { id: { in: ids } },
       select: { id: true, startDate: true, endDate: true, workingDays: true },
@@ -527,22 +525,8 @@ export async function getAttendanceSummaries(
       where: { studentId: { in: ids } },
       select: { studentId: true, submissionDate: true, status: true },
     }),
-    prisma.retakeGrant.findMany({
-      where: {
-        studentId: { in: ids },
-        revokedAt: null,
-        expiresOn: { gte: toDateColumn(currentDate) },
-      },
-      select: { studentId: true, targetDate: true },
-    }),
+    listUsableRetakeDates(ids, currentDate),
   ]);
-
-  const retakesByStudent = new Map<string, string[]>();
-  for (const row of retakes) {
-    const list = retakesByStudent.get(row.studentId) ?? [];
-    list.push(fromDateColumn(row.targetDate));
-    retakesByStudent.set(row.studentId, list);
-  }
 
   const windowByStudent = new Map(
     students.map((student) => [
@@ -619,6 +603,8 @@ export async function reviewSubmission(
     select: submissionReviewSelect,
   });
 
+  const submissionDate = fromDateColumn(existing.submissionDate);
+
   await recordAudit({
     action: input.decision === 'approved' ? 'submission_approved' : 'submission_declined',
     entityType: 'daily_submission',
@@ -627,10 +613,30 @@ export async function reviewSubmission(
     context: auth.request,
     metadata: {
       studentId: existing.studentId,
-      date: existing.submissionDate.toISOString().slice(0, 10),
+      date: submissionDate,
       ...(input.note ? { note: input.note } : {}),
     },
   });
+
+  /**
+   * Reopen the day if the reviewer said so.
+   *
+   * Runs after the decline, not before: a retake granted against a submission that failed
+   * to update would reopen a day whose answer is still sitting pending.
+   *
+   * Skipped when the day is still open, because there is nothing to reopen — a declined
+   * submission on a live day is already resubmittable, and `grantRetake` refuses a date
+   * that has not closed. The reviewer's intent is satisfied either way, so this is not an
+   * error; the audit trail records which path was taken.
+   */
+  if (input.decision === 'declined' && input.grantRetake && submissionDate < today()) {
+    await grantRetake(auth, {
+      studentId: existing.studentId,
+      targetDate: submissionDate,
+      // The decline note is the justification the student already sees.
+      reason: input.note ?? 'Declined on review. You may answer this day once more.',
+    });
+  }
 
   return serializeSubmissionDetail(updated);
 }

@@ -181,9 +181,34 @@ export const reviewSubmissionSchema = z
       .transform((value) => (value.length === 0 ? null : value))
       .nullable()
       .optional(),
+
+    /**
+     * Whether to reopen the day so the student can answer it again.
+     *
+     * Part of the decline decision rather than a separate step, because declining a day
+     * that has already closed otherwise leaves the student holding a permanent absence
+     * with no way to act on the feedback they were just given. The reviewer is the only
+     * one who knows whether the answer was fixable or simply wrong.
+     *
+     * The decline note becomes the retake's reason: one explanation covers both, and
+     * asking for a second one would just get the same words twice.
+     */
+    grantRetake: z.boolean().optional().default(false),
   })
   .superRefine((value, ctx) => {
-    if (value.decision !== 'declined') return;
+    if (value.decision !== 'declined') {
+      // Approval already counts the day present, so there is nothing to retake. Refused
+      // rather than ignored: silently dropping it would let a caller believe a retake was
+      // granted when none was.
+      if (value.grantRetake) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['grantRetake'],
+          message: 'A retake can only be granted when declining.',
+        });
+      }
+      return;
+    }
 
     const note = value.note ?? '';
     if (note.length < REVIEW_NOTE_MIN_LENGTH) {

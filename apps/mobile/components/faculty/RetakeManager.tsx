@@ -98,7 +98,7 @@ export function RetakeManager({ studentId }: { studentId: string }) {
   const onRevoke = (day: MissedDay, retakeId: string): void => {
     Alert.alert(
       'Withdraw this retake?',
-      `${formatLongDate(day.date)} will close again. Answers the student already submitted stay in your review queue.`,
+      `${formatLongDate(day.date)} will close again before the student uses their attempt.`,
       [
         { text: 'Keep it', style: 'cancel' },
         {
@@ -126,7 +126,8 @@ export function RetakeManager({ studentId }: { studentId: string }) {
 
       <Text style={styles.intro}>
         A day the student missed is counted absent and cannot be answered any more.
-        Reopening one lets them answer it, and it counts as present once you approve.
+        Reopening one gives them a single attempt, and it counts as present once you
+        approve it.
       </Text>
 
       {isLoading ? (
@@ -237,8 +238,9 @@ export function RetakeManager({ studentId }: { studentId: string }) {
               <View style={styles.modalNote}>
                 <MaterialIcons name="schedule" size={16} color={colors.textMuted} />
                 <Text style={styles.modalNoteText}>
-                  They get {RETAKE_DEFAULT_WINDOW_DAYS} days from today to answer. After
-                  that the day closes again.
+                  They get one attempt, within {RETAKE_DEFAULT_WINDOW_DAYS} days from
+                  today. The day closes again as soon as they submit, or when the deadline
+                  passes.
                 </Text>
               </View>
 
@@ -277,8 +279,7 @@ function GrantedRow({
       <View style={{ flex: 1 }}>
         <Text style={styles.rowDate}>{formatShortDate(day.date)}</Text>
         <Text style={styles.rowMeta}>
-          Open until {formatShortDate(retake.expiresOn)}
-          {retake.usedAt ? ' \u00b7 answered' : ' \u00b7 not answered yet'}
+          One attempt, open until {formatShortDate(retake.expiresOn)}
         </Text>
         {retake.reason ? (
           <Text style={styles.rowReason} numberOfLines={2}>
@@ -301,7 +302,8 @@ function GrantedRow({
 
 /** A day counted absent that could be reopened. */
 function CandidateRow({ day, onPress }: { day: MissedDay; onPress: () => void }) {
-  const expired = day.retake !== null && !day.retake.isActive;
+  // A grant that exists but can no longer be used: answered, withdrawn, or lapsed.
+  const spent = day.retake !== null && !day.retake.isActive;
 
   return (
     <View style={styles.row}>
@@ -320,11 +322,7 @@ function CandidateRow({ day, onPress }: { day: MissedDay; onPress: () => void })
         <Text style={styles.rowDate}>{formatShortDate(day.date)}</Text>
         <Text style={styles.rowMeta}>
           {describeStatus(day.status)}
-          {expired
-            ? day.retake?.revokedAt
-              ? ' \u00b7 retake withdrawn'
-              : ' \u00b7 retake expired'
-            : ''}
+          {spent ? ` \u00b7 ${describeSpentRetake(day.retake)}` : ''}
         </Text>
       </View>
       <Pressable
@@ -334,10 +332,24 @@ function CandidateRow({ day, onPress }: { day: MissedDay; onPress: () => void })
         accessibilityLabel={`Reopen ${formatLongDate(day.date)}`}
       >
         <MaterialIcons name="lock-open" size={14} color={colors.primary} />
-        <Text style={styles.grantText}>{expired ? 'Reopen again' : 'Reopen'}</Text>
+        <Text style={styles.grantText}>{spent ? 'Reopen again' : 'Reopen'}</Text>
       </Pressable>
     </View>
   );
+}
+
+/**
+ * Why an existing grant is no longer usable.
+ *
+ * "Used" is checked before the deadline, because a retake that was answered and then
+ * declined is also past nothing — it is spent, and saying "expired" would suggest the
+ * student simply ran out of time.
+ */
+function describeSpentRetake(retake: RetakeInfo | null): string {
+  if (!retake) return '';
+  if (retake.revokedAt) return 'retake withdrawn';
+  if (retake.usedAt) return 'retake already used';
+  return 'retake expired';
 }
 
 /** Why the day is not counted present, in the reviewer's terms. */

@@ -225,10 +225,19 @@ export interface RetakeInfo {
   reason: string | null;
   /** Last day the student may use it, inclusive. */
   expiresOn: DateOnly;
-  /** When the student first submitted under it. Still usable until it expires. */
+  /**
+   * When the student submitted under it.
+   *
+   * A retake is a single attempt, so this ends the grant: once set, the day closes again
+   * even if the deadline has not passed. If that answer is declined, the way back is a new
+   * grant — which the decline flow offers the reviewer.
+   */
   usedAt: Timestamp | null;
   revokedAt: Timestamp | null;
-  /** False once revoked or expired. Computed server-side against the institution clock. */
+  /**
+   * False once used, revoked, or expired. Computed server-side against the institution
+   * clock, so a grant is never "active" merely because no job has run to retire it.
+   */
   isActive: boolean;
 }
 
@@ -331,8 +340,9 @@ export interface AttendanceSummary {
    */
   daysAbsent: number;
   /**
-   * Absent days a faculty retake is currently open on, so the student can still
-   * recover them. A subset of `daysAbsent`, not an addition to it.
+   * Absent days with an unused retake still open, so the student can recover them. A
+   * subset of `daysAbsent`, not an addition to it. A retake already spent does not count
+   * here — there is nothing left to act on.
    */
   daysRecoverable: number;
   /** Distinct working days with any submission, whatever its status. */

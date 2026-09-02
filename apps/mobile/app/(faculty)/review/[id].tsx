@@ -10,7 +10,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { DocumentViewer } from '@/components/ui/DocumentViewer';
 import type { DocumentMeta } from '@ims/shared-types';
-import { REVIEW_NOTE_MIN_LENGTH, REVIEW_NOTE_MAX_LENGTH } from '@ims/shared-types';
+import {
+  RETAKE_DEFAULT_WINDOW_DAYS,
+  REVIEW_NOTE_MAX_LENGTH,
+  REVIEW_NOTE_MIN_LENGTH,
+} from '@ims/shared-types';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { StatusPill } from '@/components/ui/StatusPill';
@@ -27,6 +31,12 @@ export default function ReviewDetailScreen() {
   const [showDecline, setShowDecline] = useState(false);
   const [note, setNote] = useState('');
   const [noteError, setNoteError] = useState<string | undefined>();
+  /**
+   * Default on. Declining a closed day without reopening it leaves the student with a
+   * permanent absence and feedback they cannot act on, which is rarely what a reviewer
+   * intends — so it is opt-out rather than opt-in.
+   */
+  const [grantRetake, setGrantRetake] = useState(true);
   const [opening, setOpening] = useState<string | null>(null);
   const [docViewerUrl, setDocViewerUrl] = useState('');
   const [docViewerName, setDocViewerName] = useState('');
@@ -63,7 +73,14 @@ export default function ReviewDetailScreen() {
     }
     setNoteError(undefined);
     try {
-      await review.mutateAsync({ submissionId: id, decision: 'declined', note: trimmed });
+      await review.mutateAsync({
+        submissionId: id,
+        decision: 'declined',
+        note: trimmed,
+        // Only meaningful once the day has closed; on a live day the student can already
+        // resubmit, and the server refuses a retake for a date that is still open.
+        grantRetake: dayHasClosed && grantRetake,
+      });
       router.back();
     } catch (e) {
       if (e instanceof ApiError && e.fields?.note) { setNoteError(e.fields.note); return; }
@@ -119,6 +136,18 @@ export default function ReviewDetailScreen() {
   if (!submission) return null;
 
   const isPending = submission.status === 'pending';
+
+  /**
+   * Whether the answered day has already closed, and so needs reopening for the student to
+   * act on a decline.
+   *
+   * Compared against the device date rather than the server's, which this payload does not
+   * carry. That is fine for deciding whether to *offer* the option: the server re-checks
+   * and refuses a retake for a day that is still open, so a device clock an hour out
+   * changes what is shown, never what is granted. Faculty can still grant one from the
+   * student's page if this hides it wrongly.
+   */
+  const dayHasClosed = submission.submissionDate < new Date().toISOString().slice(0, 10);
 
   // Documents already rendered inline with their question, so the file list below
   // shows only genuinely separate attachments.
@@ -258,6 +287,37 @@ export default function ReviewDetailScreen() {
                   maxLength={REVIEW_NOTE_MAX_LENGTH}
                   required
                 />
+
+                {/* Retake decision.
+                    Only asked when the day has closed. On a live day a declined answer is
+                    already resubmittable, so offering to "reopen" it would be a control
+                    that changes nothing. */}
+                {dayHasClosed ? (
+                  <Pressable
+                    style={[styles.retakeToggle, grantRetake && styles.retakeToggleOn]}
+                    onPress={() => setGrantRetake((previous) => !previous)}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: grantRetake }}
+                    accessibilityLabel="Let the student answer this day again"
+                  >
+                    <MaterialIcons
+                      name={grantRetake ? 'check-box' : 'check-box-outline-blank'}
+                      size={22}
+                      color={grantRetake ? colors.primary : colors.textFaint}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.retakeToggleTitle}>
+                        Let them answer this day again
+                      </Text>
+                      <Text style={styles.retakeToggleBody}>
+                        {grantRetake
+                          ? `Reopens ${formatDate(submission.submissionDate)} for ${RETAKE_DEFAULT_WINDOW_DAYS} days. One attempt \u2014 approving it restores the attendance for that day.`
+                          : 'This day stays closed and counts as absent. Your note will explain why, but the student cannot act on it.'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                ) : null}
+
                 <View style={{ gap: 8, marginTop: 8 }}>
                   <Button label="Confirm decline" variant="danger" onPress={() => void onDecline()} loading={review.isPending} />
                   <Button label="Cancel" variant="secondary" onPress={() => { setShowDecline(false); setNote(''); setNoteError(undefined); }} />
@@ -318,6 +378,26 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#fff', borderRadius: 14, padding: 16, ...shadow.card },
   errorCard: { margin: 20, padding: 20, backgroundColor: '#fff', borderRadius: 14, gap: 12 },
   noteBox: { flexDirection: 'row', gap: 10, backgroundColor: colors.dangerBg, borderRadius: 12, padding: 14 },
+
+  // Retake opt-out inside the decline sheet.
+  retakeToggle: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+  },
+  retakeToggleOn: { borderColor: colors.primary, backgroundColor: colors.infoBg },
+  retakeToggleTitle: { fontSize: fontSize.small, fontWeight: '700', color: colors.text },
+  retakeToggleBody: {
+    fontSize: fontSize.caption,
+    color: colors.textMuted,
+    lineHeight: 16,
+    marginTop: 2,
+  },
   noteLabel: { fontSize: 11, fontWeight: '700', color: colors.danger },
   noteText: { fontSize: 13, color: colors.text, lineHeight: 18, marginTop: 2 },
   answerHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },

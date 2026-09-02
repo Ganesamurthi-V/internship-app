@@ -1139,6 +1139,38 @@ describe('reviewSubmissionSchema', () => {
       }).success,
     ).toBe(true);
   });
+
+  // Declining a closed day without reopening it leaves the student with a permanent
+  // absence and feedback they cannot act on, so the reviewer is asked as part of the
+  // decision rather than in a separate step.
+  it('defaults to not granting a retake', () => {
+    const result = reviewSubmissionSchema.safeParse({ decision: 'approved' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.grantRetake).toBe(false);
+  });
+
+  it('accepts a decline that also grants a retake', () => {
+    const result = reviewSubmissionSchema.safeParse({
+      decision: 'declined',
+      note: 'Please describe the testing you actually ran.',
+      grantRetake: true,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.grantRetake).toBe(true);
+  });
+
+  it('refuses a retake alongside an approval, rather than ignoring it', () => {
+    // An approved day already counts present, so there is nothing to retake. Silently
+    // dropping the flag would let a caller believe a retake had been granted.
+    const result = reviewSubmissionSchema.safeParse({
+      decision: 'approved',
+      grantRetake: true,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toEqual(['grantRetake']);
+    }
+  });
 });
 
 describe('createQuestionSchema', () => {

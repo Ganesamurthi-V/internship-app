@@ -163,7 +163,7 @@ export default function StudentDashboardScreen() {
                   Retake for {formatShortDate(retake.targetDate)}
                 </Text>
                 <Text style={styles.retakeSubtitle}>
-                  Answer by {formatShortDate(retake.expiresOn)} (
+                  One attempt. Answer by {formatShortDate(retake.expiresOn)} (
                   {describeDaysUntil(retake.expiresOn, today.date)}) and this day counts
                   as present once approved.
                 </Text>

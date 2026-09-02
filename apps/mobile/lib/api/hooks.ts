@@ -142,10 +142,21 @@ export function useReviewSubmission() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: { submissionId: string } & ReviewSubmissionInput) =>
+    /**
+     * Spelled out rather than derived from `ReviewSubmissionInput`, because that type is
+     * the schema's *output* — where `grantRetake` has been defaulted and is therefore
+     * required. Callers approving a submission should not have to pass it.
+     */
+    mutationFn: (input: {
+      submissionId: string;
+      decision: ReviewSubmissionInput['decision'];
+      note?: string | null;
+      grantRetake?: boolean;
+    }) =>
       api.post<DailySubmissionDetail>(`/submissions/${input.submissionId}/review`, {
         decision: input.decision,
         note: input.note ?? null,
+        grantRetake: input.grantRetake ?? false,
       }),
 
     onSuccess: () => {
@@ -153,6 +164,8 @@ export function useReviewSubmission() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
       // A decision changes the student's approval percentage in the directory too.
       void queryClient.invalidateQueries({ queryKey: queryKeys.students.all });
+      // A decline can grant a retake, which changes the missed-day and retake lists.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.retakes.all });
     },
   });
 }
