@@ -34,7 +34,14 @@ import {
   summariseSubmissions,
   emptyAttendanceSummary,
 } from './calculations';
-import { describeWorkingDays } from '@ims/shared-types';
+import {
+  ANSWER_HARD_MAX_LENGTH,
+  LONG_ANSWER_MAX_WORDS,
+  LONG_ANSWER_MIN_WORDS,
+  SHORT_ANSWER_MAX_WORDS,
+  SHORT_ANSWER_MIN_WORDS,
+  describeWorkingDays,
+} from '@ims/shared-types';
 import { answerValidatorFor } from './question';
 import { validateAnswersAgainstQuestions, type QuestionRule } from './submission';
 import { reviewSubmissionSchema } from './submission';
@@ -798,9 +805,9 @@ describe('findUnknownAnswers', () => {
 // ---------------------------------------------------------------------------
 
 describe('answerValidatorFor', () => {
-  it('enforces the question’s own minimum length', () => {
+  it('enforces the character minimum for a type with no word bounds', () => {
     const validator = answerValidatorFor({
-      type: 'long_text',
+      type: 'unknown_type',
       required: true,
       options: null,
       minLength: 20,
@@ -811,15 +818,142 @@ describe('answerValidatorFor', () => {
     expect(validator.safeParse('this answer is definitely long enough').success).toBe(true);
   });
 
-  it('enforces the maximum length', () => {
-    const validator = answerValidatorFor({
+  // The written limit on free text is a word count derived from the question type. A
+  // character cap stored on the question is deliberately not applied to those types.
+  describe('word limits on free text', () => {
+    const words = (count: number): string =>
+      Array.from({ length: count }, () => 'word').join(' ');
+
+    const textValidator = answerValidatorFor({
       type: 'text',
       required: true,
       options: null,
-      minLength: 1,
-      maxLength: 10,
+      minLength: null,
+      maxLength: null,
     });
-    expect(validator.safeParse('12345678901').success).toBe(false);
+
+    const longTextValidator = answerValidatorFor({
+      type: 'long_text',
+      required: true,
+      options: null,
+      minLength: null,
+      maxLength: null,
+    });
+
+    it('allows exactly the ceiling and rejects one word over', () => {
+      expect(textValidator.safeParse(words(SHORT_ANSWER_MAX_WORDS)).success).toBe(true);
+      expect(textValidator.safeParse(words(SHORT_ANSWER_MAX_WORDS + 1)).success).toBe(false);
+
+      expect(longTextValidator.safeParse(words(LONG_ANSWER_MAX_WORDS)).success).toBe(true);
+      expect(longTextValidator.safeParse(words(LONG_ANSWER_MAX_WORDS + 1)).success).toBe(false);
+    });
+
+    it('allows exactly the floor and rejects one word under', () => {
+      expect(textValidator.safeParse(words(SHORT_ANSWER_MIN_WORDS)).success).toBe(true);
+      expect(textValidator.safeParse(words(SHORT_ANSWER_MIN_WORDS - 1)).success).toBe(false);
+
+      expect(longTextValidator.safeParse(words(LONG_ANSWER_MIN_WORDS)).success).toBe(true);
+      expect(longTextValidator.safeParse(words(LONG_ANSWER_MIN_WORDS - 1)).success).toBe(false);
+    });
+
+    it('gives a paragraph a higher floor than short text', () => {
+      // Clears short text's minimum but not a paragraph's.
+      const between = words(SHORT_ANSWER_MIN_WORDS + 5);
+      expect(textValidator.safeParse(between).success).toBe(true);
+      expect(longTextValidator.safeParse(between).success).toBe(false);
+    });
+
+    it('reports the floor in words', () => {
+      const result = longTextValidator.safeParse(words(4));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toBe(
+          `Write at least ${LONG_ANSWER_MIN_WORDS} words. You have 4.`,
+        );
+      }
+    });
+
+    it('applies no floor to an optional question, so a short answer is still accepted', () => {
+      const optional = answerValidatorFor({
+        type: 'long_text',
+        required: false,
+        options: null,
+        minLength: null,
+        maxLength: null,
+      });
+      expect(optional.safeParse(words(2)).success).toBe(true);
+      // The ceiling still applies.
+      expect(optional.safeParse(words(LONG_ANSWER_MAX_WORDS + 1)).success).toBe(false);
+    });
+
+    it('gives short text a smaller allowance than a paragraph', () => {
+      const between = words(SHORT_ANSWER_MAX_WORDS + 50);
+      expect(textValidator.safeParse(between).success).toBe(false);
+      expect(longTextValidator.safeParse(between).success).toBe(true);
+    });
+
+    it('ignores a stored character minimum, so only the word floor applies', () => {
+      const capped = answerValidatorFor({
+        type: 'text',
+        required: true,
+        options: null,
+        // Far more characters than 10 words of "word" provides. The old rule would have
+        // rejected this.
+        minLength: 500,
+        maxLength: null,
+      });
+      expect(capped.safeParse(words(SHORT_ANSWER_MIN_WORDS)).success).toBe(true);
+    });
+
+    it('reports the word count in the message, not a character count', () => {
+      const result = textValidator.safeParse(words(SHORT_ANSWER_MAX_WORDS + 3));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toBe(
+          `Keep it to ${SHORT_ANSWER_MAX_WORDS} words or fewer. You have ${SHORT_ANSWER_MAX_WORDS + 3}.`,
+        );
+      }
+    });
+
+    it('ignores a stored character cap, so the counter cannot disagree with the rule', () => {
+      const capped = answerValidatorFor({
+        type: 'long_text',
+        required: true,
+        options: null,
+        minLength: null,
+        // Well under what 200 words needs. The old rule would have rejected this.
+        maxLength: 50,
+      });
+      expect(capped.safeParse(words(120)).success).toBe(true);
+    });
+
+    it('still refuses one unbroken string, which counts as a single word', () => {
+      // Optional, so the word floor cannot be what rejects it: this isolates the
+      // character ceiling that exists for exactly this case.
+      const optional = answerValidatorFor({
+        type: 'text',
+        required: false,
+        options: null,
+        minLength: null,
+        maxLength: null,
+      });
+      const oneHugeWord = 'x'.repeat(ANSWER_HARD_MAX_LENGTH + 1);
+
+      expect(countWords(oneHugeWord)).toBe(1);
+      expect(optional.safeParse(oneHugeWord).success).toBe(false);
+    });
+
+    it('leaves the character bound in place for types with no word limit', () => {
+      const numberish = answerValidatorFor({
+        type: 'unknown_type',
+        required: true,
+        options: null,
+        minLength: null,
+        maxLength: 10,
+      });
+      expect(numberish.safeParse('12345678901').success).toBe(false);
+      expect(numberish.safeParse('1234567890').success).toBe(true);
+    });
   });
 
   it('accepts blank for an optional question', () => {
@@ -888,9 +1022,18 @@ describe('validateAnswersAgainstQuestions', () => {
     },
   ];
 
+  /**
+   * An answer that clears `q1`'s 30-word floor.
+   *
+   * These cases are about whole-submission mechanics — snapshotting, unknown ids, omitting
+   * blanks — so the content is filler; it just has to be long enough not to fail for an
+   * unrelated reason.
+   */
+  const validParagraph = Array.from({ length: LONG_ANSWER_MIN_WORDS }, () => 'word').join(' ');
+
   it('returns validated answers with the prompt snapshotted', () => {
     const result = validateAnswersAgainstQuestions(questions, [
-      { questionId: 'q1', answerText: 'Built the submission review screen today.' },
+      { questionId: 'q1', answerText: validParagraph },
     ]);
 
     expect(result.ok).toBe(true);
@@ -912,7 +1055,7 @@ describe('validateAnswersAgainstQuestions', () => {
 
   it('rejects an answer to a question that was not offered', () => {
     const result = validateAnswersAgainstQuestions(questions, [
-      { questionId: 'q1', answerText: 'A perfectly good answer here.' },
+      { questionId: 'q1', answerText: validParagraph },
       { questionId: 'ghost', answerText: 'unexpected' },
     ]);
 
@@ -923,7 +1066,7 @@ describe('validateAnswersAgainstQuestions', () => {
 
   it('omits an unanswered optional question rather than writing a blank row', () => {
     const result = validateAnswersAgainstQuestions(questions, [
-      { questionId: 'q1', answerText: 'Worked through the review queue.' },
+      { questionId: 'q1', answerText: validParagraph },
       { questionId: 'q2', answerText: '   ' },
     ]);
 
@@ -939,7 +1082,7 @@ describe('validateAnswersAgainstQuestions', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.fields.q1).toMatch(/at least 10/iu);
+    expect(result.fields.q1).toMatch(new RegExp(`at least ${LONG_ANSWER_MIN_WORDS} words`, 'iu'));
   });
 });
 

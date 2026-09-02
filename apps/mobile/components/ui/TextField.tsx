@@ -26,10 +26,18 @@ interface TextFieldProps extends Omit<TextInputProps, 'style'> {
   multiline?: boolean;
   /** Slot for a WordCounter, shown on the right of the label row. */
   accessory?: React.ReactNode;
+  /**
+   * Slot rendered directly beneath the input, above any error or helper text.
+   *
+   * Separate from `accessory` because a live word count belongs next to what is being
+   * counted, and because it has to stay visible when an error appears — the moment a
+   * student is over the limit is exactly when they need to see the number.
+   */
+  footer?: React.ReactNode;
 }
 
 export const TextField = forwardRef<TextInput, TextFieldProps>(function TextField(
-  { label, error, helper, required = false, multiline = false, accessory, ...inputProps },
+  { label, error, helper, required = false, multiline = false, accessory, footer, ...inputProps },
   ref,
 ) {
   return (
@@ -57,6 +65,8 @@ export const TextField = forwardRef<TextInput, TextFieldProps>(function TextFiel
         // announced by the live region below and folded into the hint here instead.
         accessibilityHint={error ?? helper}
       />
+
+      {footer ? <View style={styles.footer}>{footer}</View> : null}
 
       {error ? (
         <View accessibilityLiveRegion="polite">
@@ -91,6 +101,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   multiline: { minHeight: 120, textAlignVertical: 'top' },
+  // Right-aligned so a live count sits under the end of the input and does not compete
+  // with the error text that appears below it.
+  footer: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: spacing.xs },
   inputError: { borderColor: colors.danger, borderWidth: 1.5 },
   error: { marginTop: spacing.xs, fontSize: fontSize.small, color: colors.danger },
   helper: { marginTop: spacing.xs, fontSize: fontSize.caption, color: colors.textMuted },

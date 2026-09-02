@@ -58,6 +58,64 @@ export const MAX_FILES_PER_SUBMISSION = 5;
 export const ANSWER_MIN_LENGTH = 10;
 export const ANSWER_MAX_LENGTH = 2000;
 
+// ---------------------------------------------------------------------------
+// Answer length in words
+// ---------------------------------------------------------------------------
+
+/**
+ * The written limits on a text answer are word counts, not character counts.
+ *
+ * Words are what a student is actually asked for ("write 100 words on what you did
+ * today"), and a character budget is impossible to plan against while typing — the same
+ * paragraph passes or fails depending on how long the words in it happen to be.
+ *
+ * The floor matters as much as the ceiling: it is what stops "did some work" from
+ * satisfying a reflective question, which is the whole point of asking one.
+ */
+export const SHORT_ANSWER_MIN_WORDS = 10;
+export const SHORT_ANSWER_MAX_WORDS = 100;
+export const LONG_ANSWER_MIN_WORDS = 30;
+export const LONG_ANSWER_MAX_WORDS = 200;
+
+/**
+ * Absolute ceiling on one answer, in characters.
+ *
+ * Not a writing rule — the writing rule is the word count above, and this is set far
+ * beyond any realistic answer so it never fires for a student writing normally. It
+ * exists only so a single answer cannot be megabytes of text: the word counter splits
+ * on whitespace, so one continuous string with no spaces counts as a single word no
+ * matter how long it is, and without this that would be unbounded.
+ */
+export const ANSWER_HARD_MAX_LENGTH = 10_000;
+
+/** Inclusive word bounds for a free-text answer. */
+export interface AnswerWordBounds {
+  readonly min: number;
+  readonly max: number;
+}
+
+/**
+ * Word bounds for a question type, or null when the type is not free text.
+ *
+ * Returned as a pair rather than through two separate lookups so a caller cannot read
+ * the minimum for one type and the maximum for another — the validator and the on-screen
+ * counter both depend on getting a matched set.
+ *
+ * Derived from the type rather than stored per question, because the bounds are a
+ * property of what "short" and "long" mean rather than something an author picks per
+ * prompt. Typed loosely on the input so callers holding a raw string from the database do
+ * not have to assert it first.
+ */
+export function wordBoundsForQuestionType(type: string): AnswerWordBounds | null {
+  if (type === 'text') {
+    return { min: SHORT_ANSWER_MIN_WORDS, max: SHORT_ANSWER_MAX_WORDS };
+  }
+  if (type === 'long_text') {
+    return { min: LONG_ANSWER_MIN_WORDS, max: LONG_ANSWER_MAX_WORDS };
+  }
+  return null;
+}
+
 /** Bounds a question author may choose between. */
 export const QUESTION_PROMPT_MAX_LENGTH = 500;
 export const QUESTION_HELP_TEXT_MAX_LENGTH = 300;

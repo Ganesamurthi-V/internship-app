@@ -8,6 +8,7 @@
 
 import { z } from 'zod';
 import {
+  ANSWER_HARD_MAX_LENGTH,
   ANSWER_MAX_LENGTH,
   ANSWER_MIN_LENGTH,
   MAX_QUESTION_OPTIONS,
@@ -15,8 +16,9 @@ import {
   QUESTION_OPTION_MAX_LENGTH,
   QUESTION_PROMPT_MAX_LENGTH,
   QUESTION_TYPES,
+  wordBoundsForQuestionType,
 } from '@ims/shared-types';
-import { sanitizeText } from './calculations';
+import { countWords, sanitizeText } from './calculations';
 import { booleanQuerySchema, optionalText, paginationQuerySchema, textField, uuidSchema } from './common';
 
 /**
@@ -226,6 +228,14 @@ export function answerValidatorFor(question: {
   }
 
   // text and long_text
+  //
+  // Both bounds are WORD counts derived from the type: 10-100 for short text, 30-200 for
+  // a paragraph. The stored `minLength`/`maxLength` character bounds are deliberately not
+  // enforced for these types. They were never chosen by an author — the question editor
+  // auto-filled them — and applying both would let an answer sit inside the word range the
+  // counter shows while failing a character rule the student was never told about.
+  const wordBounds = wordBoundsForQuestionType(question.type);
+
   return z
     .string()
     .transform(sanitizeText)
@@ -236,16 +246,46 @@ export function answerValidatorFor(question: {
         }
         return;
       }
-      if (value.length < min) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `Write at least ${min} characters. You have ${value.length}.`,
-        });
+
+      if (wordBounds !== null) {
+        const words = countWords(value);
+
+        // The floor applies only to required questions: choosing to answer an optional
+        // one should not oblige the student to write a minimum essay.
+        if (question.required && words < wordBounds.min) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Write at least ${wordBounds.min} words. You have ${words}.`,
+          });
+        }
+        if (words > wordBounds.max) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Keep it to ${wordBounds.max} words or fewer. You have ${words}.`,
+          });
+        }
+      } else {
+        // A type with no word bounds falls back to the character bounds.
+        if (value.length < min) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Write at least ${min} characters. You have ${value.length}.`,
+          });
+        }
+        if (value.length > max) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Keep it to ${max} characters or fewer. You have ${value.length}.`,
+          });
+        }
       }
-      if (value.length > max) {
+
+      // Guards the one case the word count cannot: a single unbroken string counts as one
+      // word however long it is.
+      if (value.length > ANSWER_HARD_MAX_LENGTH) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `Keep it to ${max} characters or fewer. You have ${value.length}.`,
+          message: 'This answer is too long.',
         });
       }
     });

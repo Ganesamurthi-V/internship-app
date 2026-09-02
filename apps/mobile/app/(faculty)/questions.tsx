@@ -15,11 +15,11 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import type { Question, QuestionType } from '@ims/shared-types';
 import {
-  ANSWER_MAX_LENGTH,
   MAX_ACTIVE_QUESTIONS,
   QUESTION_PROMPT_MAX_LENGTH,
   QUESTION_TYPE_LABELS,
   QUESTION_TYPES,
+  wordBoundsForQuestionType,
 } from '@ims/shared-types';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -54,6 +54,7 @@ export default function QuestionsScreen() {
   const [prompt, setPrompt] = useState('');
   const [helpText, setHelpText] = useState('');
   const [type, setType] = useState<QuestionType>('long_text');
+  const typeWordBounds = wordBoundsForQuestionType(type);
   const [required, setRequired] = useState(true);
   const [choiceOptions, setChoiceOptions] = useState<string[]>(['', '']);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -98,7 +99,9 @@ export default function QuestionsScreen() {
           type,
           required,
           options: options ?? null,
-          maxLength: type === 'long_text' ? ANSWER_MAX_LENGTH : null,
+          // Null for text types: their limit is a word count derived from the type, and
+          // storing a character cap alongside it would be a second, invisible rule.
+          maxLength: null,
         });
       } else {
         await createQuestion.mutateAsync({
@@ -109,7 +112,7 @@ export default function QuestionsScreen() {
           sortOrder: (active.length + 1) * 10,
           options: options ?? null,
           minLength: null,
-          maxLength: type === 'long_text' ? ANSWER_MAX_LENGTH : null,
+          maxLength: null,
           departmentId: null, // Backend auto-assigns faculty's department
           referenceDocId: null,
         });
@@ -268,6 +271,17 @@ export default function QuestionsScreen() {
               value={type}
               onChange={(next) => setType(next)}
             />
+
+            {/* States the limit the chosen type carries, so an author setting a prompt
+                like "write 150 words" can see that short text would not allow it. */}
+            {typeWordBounds !== null ? (
+              <Text style={styles.typeHint}>
+                {required
+                  ? `Students must write between ${typeWordBounds.min} and ${typeWordBounds.max} words.`
+                  : `Students can write up to ${typeWordBounds.max} words. Optional questions have no minimum.`}{' '}
+                The word count is shown to them as they type.
+              </Text>
+            ) : null}
 
             {type === 'choice' ? (
               <View style={styles.optionsSection}>
@@ -534,6 +548,15 @@ const styles = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.border,
     marginHorizontal: 16,
+  },
+  // Sits under the answer-type chips, which carry their own bottom margin, so this pulls
+  // up to stay visually attached to them.
+  typeHint: {
+    fontSize: fontSize.caption,
+    color: colors.textMuted,
+    lineHeight: 16,
+    marginTop: -4,
+    marginBottom: 12,
   },
   optionsSection: { marginBottom: 12 },
   optionsLabel: { fontSize: 13, fontWeight: '600', color: colors.text, marginBottom: 8 },

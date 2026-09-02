@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 import {
-  ANSWER_MAX_LENGTH,
+  ANSWER_HARD_MAX_LENGTH,
   MAX_ACTIVE_QUESTIONS,
   MAX_FILES_PER_SUBMISSION,
   REVIEW_DECISIONS,
@@ -37,8 +37,12 @@ export const answerInputSchema = z.object({
    * Bounded generously here; the real per-question rule is applied server-side
    * once we know which question this is. This bound exists only to stop an
    * absurd payload before any work is done.
+   *
+   * Uses the hard ceiling rather than a multiple of the character bound, because the
+   * real limit on a text answer is a word count: rejecting on characters here would
+   * refuse an answer inside its word limit before the word rule ever ran.
    */
-  answerText: z.string().max(ANSWER_MAX_LENGTH * 2, { message: 'Answer is too long.' }),
+  answerText: z.string().max(ANSWER_HARD_MAX_LENGTH, { message: 'Answer is too long.' }),
 });
 export type AnswerInputParsed = z.output<typeof answerInputSchema>;
 

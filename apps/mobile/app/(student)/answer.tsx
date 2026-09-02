@@ -17,7 +17,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import type { DocumentMeta, Question } from '@ims/shared-types';
-import { answerValidatorFor } from '@ims/shared-validation';
+import { wordBoundsForQuestionType } from '@ims/shared-types';
+import { answerValidatorFor, countWords } from '@ims/shared-validation';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { ChipGroup } from '@/components/ui/Chips';
@@ -413,15 +414,41 @@ function QuestionField({
   uploadedFiles: Record<string, DocumentMeta>;
   onViewFile: (file: DocumentMeta) => void;
 }) {
+  /**
+   * Live word count for free-text answers.
+   *
+   * Derived from the question type rather than from the stored length columns, so it
+   * appears for short text as well as paragraphs — it used to render only when
+   * `maxLength` happened to be set, which the editor did for paragraphs and not for
+   * short text.
+   *
+   * The target it counts towards changes with progress. Below the minimum it shows
+   * `min 5/10 words`, because the number the student needs then is how far they still
+   * have to go; once clear of it, it switches to the ceiling. Showing only the ceiling
+   * would leave someone at 4 words looking at `4/200` with no hint they are short.
+   */
+  const wordBounds = wordBoundsForQuestionType(question.type);
+  const wordCount = wordBounds === null ? 0 : countWords(value);
+
+  const belowMinimum = wordBounds !== null && question.required && wordCount < wordBounds.min;
+  const overMaximum = wordBounds !== null && wordCount > wordBounds.max;
+
   const counter =
-    question.maxLength && (question.type === 'text' || question.type === 'long_text') ? (
+    wordBounds !== null ? (
       <Text
-        style={[
-          styles.counter,
-          value.length > question.maxLength ? styles.counterOver : null,
-        ]}
+        // Only the ceiling is flagged red. Being under the minimum is the normal state
+        // while typing the first sentence, and colouring it as an error would mean the
+        // field opens looking broken.
+        style={[styles.counter, overMaximum ? styles.counterOver : null]}
+        accessibilityLabel={
+          belowMinimum
+            ? `${wordCount} words. At least ${wordBounds.min} needed.`
+            : `${wordCount} of ${wordBounds.max} words used`
+        }
       >
-        {value.length}/{question.maxLength}
+        {belowMinimum
+          ? `min ${wordCount}/${wordBounds.min} words`
+          : `${wordCount}/${wordBounds.max} words`}
       </Text>
     ) : null;
 
@@ -556,7 +583,7 @@ function QuestionField({
         keyboardType={question.type === 'number' ? 'decimal-pad' : 'default'}
         placeholder={question.type === 'number' ? 'e.g. 8' : 'Type your answer'}
         error={error}
-        accessory={counter}
+        footer={counter}
         accessibilityLabel={question.prompt}
       />
     </View>
