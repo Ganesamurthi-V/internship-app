@@ -11,8 +11,7 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { ChipGroup } from '@/components/ui/Chips';
 import { StatusPill } from '@/components/ui/StatusPill';
 import { ListSkeleton } from '@/components/ui/SkeletonLoader';
-import type { FacultyDashboard as FacultyDashboardData } from '@ims/shared-types';
-import { useDashboard, useStudentList } from '@/lib/api/hooks';
+import { usePendingStudents, useStudentList } from '@/lib/api/hooks';
 import { colors, fontSize, shadow, spacing } from '@/constants/theme';
 
 type Filter = 'all' | 'submitted' | 'missing';
@@ -33,13 +32,10 @@ export default function StudentsScreen() {
     submittedToday: filter === 'all' ? undefined : filter === 'submitted',
   });
 
-  // Reuses the dashboard query, which is already cached app-wide, so surfacing the
-  // pending count here costs no extra request.
-  const { data: dashData } = useDashboard();
-  const pendingCount =
-    dashData && dashData.role !== 'student'
-      ? ((dashData.dashboard as FacultyDashboardData).pendingStudents ?? 0)
-      : 0;
+  // Shares its cache with the approvals screen this button leads to, so the badge and
+  // that list can never disagree about how many are waiting.
+  const { data: pendingStudents } = usePendingStudents();
+  const pendingCount = pendingStudents?.length ?? 0;
 
   const items = data?.items ?? [];
 
@@ -70,8 +66,6 @@ export default function StudentsScreen() {
             }
           >
             <MaterialIcons name="person-add" size={20} color="#fff" />
-            {/* Coerced, because this field is absent until the API that returns it is
-                deployed, and an uncoerced value renders the literal word "undefined". */}
             {pendingCount > 0 ? (
               <View style={styles.pendingBadge}>
                 <Text style={styles.pendingBadgeText}>

@@ -12,46 +12,20 @@ import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { DocumentViewer } from '@/components/ui/DocumentViewer';
 import { api, ApiError } from '@/lib/api/client';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
+import { usePendingStudents, type PendingStudent as PendingStudentDto } from '@/lib/api/hooks';
 import { PROGRAMME_LABEL } from '@/constants/academics';
 import { colors, fontSize, shadow, spacing } from '@/constants/theme';
 
-interface PendingStudent {
-  id: string;
-  registerNumber: string;
-  name: string;
-  programme: string;
-  departmentName: string | null;
-  year: number | null;
-  section: string | null;
-  email: string;
-  mobile: string;
-  organisationName: string | null;
-  organisationLocation: string | null;
-  internshipDomain: string | null;
-  internshipMode: string | null;
-  startDate: string | null;
-  endDate: string | null;
-  durationDays: number | null;
-  workingHoursPerDay: number | null;
-  mentorName: string | null;
-  mentorDesignation: string | null;
-  mentorContact: string | null;
-  facultyCoordinator: string | null;
-  offerLetterDocId: string | null;
-  joiningLetterDocId: string | null;
-  status: string;
-  createdAt: string;
-}
+// The shape lives with the API layer in `lib/api/hooks`, so this screen and the badges
+// that count these rows cannot drift apart.
+type PendingStudent = PendingStudentDto;
 
 export default function PendingStudentsScreen() {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
-  const { data: students, isLoading, refetch, isRefetching } = useQuery({
-    queryKey: ['students', 'pending'],
-    queryFn: () => api.get<PendingStudent[]>('/students/pending'),
-    staleTime: 30 * 1000,
-  });
+  // The shared hook, so this list and the badges that count it read one cache entry.
+  const { data: students, isLoading, refetch, isRefetching } = usePendingStudents();
 
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');

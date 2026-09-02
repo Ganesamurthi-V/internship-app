@@ -390,11 +390,6 @@ export interface FacultyDashboard {
    * a registration is sitting unactioned.
    */
   totalStudents: number;
-  /**
-   * Students in scope whose account is still pending approval. Surfaced separately so
-   * the dashboard can prompt the reviewer to act on new registrations.
-   */
-  pendingStudents: number;
   activeQuestions: number;
 }
 

@@ -180,6 +180,61 @@ export function useBulkReview() {
 }
 
 // ---------------------------------------------------------------------------
+// Pending registrations
+// ---------------------------------------------------------------------------
+
+/**
+ * A student registration awaiting approval.
+ *
+ * Shaped by `/api/students/pending`, which builds its payload inline rather than from a
+ * shared serializer, so this mirrors that route by hand.
+ */
+export interface PendingStudent {
+  id: string;
+  registerNumber: string;
+  name: string;
+  programme: string;
+  departmentName: string | null;
+  year: number | null;
+  section: string | null;
+  email: string;
+  mobile: string;
+  organisationName: string | null;
+  organisationLocation: string | null;
+  internshipDomain: string | null;
+  internshipMode: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  durationDays: number | null;
+  workingHoursPerDay: number | null;
+  mentorName: string | null;
+  mentorDesignation: string | null;
+  mentorContact: string | null;
+  facultyCoordinator: string | null;
+  offerLetterDocId: string | null;
+  joiningLetterDocId: string | null;
+  status: string;
+  createdAt: string;
+}
+
+/**
+ * Registrations awaiting the caller's approval.
+ *
+ * Deliberately sourced from the pending *list* rather than from a count on the dashboard
+ * payload. The list endpoint already exists and is already deployed, so the badges that
+ * depend on it work without waiting on a backend release — and because the approvals
+ * screen uses this same hook, the count on the dashboard and the rows on that screen
+ * come from one cache entry and cannot disagree.
+ */
+export function usePendingStudents() {
+  return useQuery({
+    queryKey: queryKeys.students.pending,
+    queryFn: () => api.get<PendingStudent[]>('/students/pending'),
+    staleTime: 30 * 1000,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Retakes
 // ---------------------------------------------------------------------------
 

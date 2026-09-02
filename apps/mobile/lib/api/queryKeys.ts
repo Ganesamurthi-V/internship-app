@@ -33,6 +33,8 @@ export const queryKeys = {
     me: ['students', 'me'] as const,
     list: (filters: object) => ['students', 'list', filters] as const,
     detail: (studentId: string) => ['students', studentId] as const,
+    /** Registrations awaiting approval. Shared by the approvals screen and the badges. */
+    pending: ['students', 'pending'] as const,
   },
 
   retakes: {

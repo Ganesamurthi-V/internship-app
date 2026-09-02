@@ -241,44 +241,14 @@ export default function StudentDashboardScreen() {
                 <Text style={styles.attendanceNote}>
                   You start at 100% of your {summary.internshipDays} internship days and
                   only lose ground when a working day closes without an approved answer.
-                  Answering on time protects your attendance even while it waits for
-                  review.
-                  {summary.workingDays && summary.workingDays.length > 0
-                    ? ` Counted on ${describeWorkingDays(summary.workingDays)}.`
-                    : ''}
+
                 </Text>
               </>
             )}
           </View>
 
-          {/* ---- Action Tiles ---- */}
-          <View style={styles.tileRow}>
-            <Pressable
-              style={[styles.tile, { backgroundColor: colors.successBg }]}
-              onPress={() => router.push('/(student)/history')}
-            >
-              <View style={[styles.tileIcon, { backgroundColor: '#c8e6d5' }]}>
-                <MaterialIcons name="check-circle" size={20} color={colors.success} />
-              </View>
-              <Text style={styles.tileValue}>{summary.daysApproved ?? 0}</Text>
-              <MaterialIcons name="chevron-right" size={18} color={colors.success} style={styles.tileArrow} />
-              <Text style={styles.tileLabel}>Days approved</Text>
-              <Text style={styles.tileSublabel}>Attendance counted</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.tile, { backgroundColor: colors.warningBg }]}
-              onPress={() => router.push('/(student)/history')}
-            >
-              <View style={[styles.tileIcon, { backgroundColor: '#fce6b3' }]}>
-                <MaterialIcons name="schedule" size={20} color={colors.warning} />
-              </View>
-              <Text style={styles.tileValue}>{summary.daysPending}</Text>
-              <MaterialIcons name="chevron-right" size={18} color={colors.warning} style={styles.tileArrow} />
-              <Text style={styles.tileLabel}>Awaiting review</Text>
-              <Text style={styles.tileSublabel}>Under faculty check</Text>
-            </Pressable>
-          </View>
+          {/* Both figures remain on the attendance card above, and the history screen is
+              still reachable from the "See all" link there. */}
 
           {/* ---- Recent Submissions ---- */}
           {dashboard.recentSubmissions.length > 0 && (
@@ -505,25 +475,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   statusBadgeText: { fontSize: 12, fontWeight: '700' },
-  tileRow: { flexDirection: 'row', gap: 12 },
-  tile: {
-    flex: 1,
-    borderRadius: 16,
-    padding: 16,
-    minHeight: 120,
-  },
-  tileIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  tileValue: { fontSize: 28, fontWeight: '800', color: colors.text, fontVariant: ['tabular-nums'] },
-  tileArrow: { position: 'absolute', top: 16, right: 16 },
-  tileLabel: { fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 4 },
-  tileSublabel: { fontSize: 11, color: colors.textMuted, marginTop: 1 },
   recentRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

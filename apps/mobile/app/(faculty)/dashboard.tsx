@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import type { FacultyDashboard as FacultyDashboardData } from '@ims/shared-types';
 import { FacultyDashboardSkeleton } from '@/components/ui/SkeletonLoader';
-import { useDashboard } from '@/lib/api/hooks';
+import { useDashboard, usePendingStudents } from '@/lib/api/hooks';
 import { useAuthStore } from '@/stores/authStore';
 import { colors, fontSize, radius, shadow, spacing } from '@/constants/theme';
 
@@ -19,6 +19,12 @@ export default function FacultyDashboardScreen() {
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
   const { data, isLoading, isRefetching, refetch, error } = useDashboard();
+
+  // Separate from the dashboard payload on purpose: this endpoint is already deployed, so
+  // the "waiting for approval" prompt works without a backend release, and it shares its
+  // cache with the approvals screen.
+  const { data: pendingStudents, refetch: refetchPending } = usePendingStudents();
+  const pendingCount = pendingStudents?.length ?? 0;
 
   const dashboard =
     data && data.role !== 'student' ? (data.dashboard as FacultyDashboardData) : null;
@@ -58,7 +64,18 @@ export default function FacultyDashboardScreen() {
     <View style={styles.container}>
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} tintColor={colors.primary} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            // Both, or a pull-to-refresh would leave the approval prompt showing a stale
+            // count while every other figure on the screen updated.
+            onRefresh={() => {
+              void refetch();
+              void refetchPending();
+            }}
+            tintColor={colors.primary}
+          />
+        }
         contentContainerStyle={{ paddingBottom: 32 }}
       >
         {/* ---- Gradient Header ---- */}
@@ -79,7 +96,40 @@ export default function FacultyDashboardScreen() {
         </LinearGradient>
 
         <View style={styles.content}>
-          {/* ---- Pending Review Card ---- */}
+          {/* ---- Pending registrations ----
+              Rendered only when something is actually waiting, so it costs no space on a
+              quiet day. It sits above the review card because an unapproved student
+              cannot log in or submit at all: it blocks more than a pending review does.
+
+              The count comes from the pending list rather than the dashboard payload, so
+              this works against the currently deployed API. */}
+          {pendingCount > 0 ? (
+            <Pressable
+              style={styles.alertCard}
+              onPress={() => router.push('/(faculty)/students/pending')}
+              accessibilityRole="button"
+              accessibilityLabel={`Review ${pendingCount} pending registration${pendingCount === 1 ? '' : 's'}`}
+            >
+              <View style={[styles.iconCircle, { backgroundColor: colors.warningBg }]}>
+                <MaterialIcons name="person-add" size={24} color={colors.warning} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>
+                  {pendingCount} student{pendingCount === 1 ? '' : 's'} waiting for approval
+                </Text>
+                <Text style={styles.cardSubtitle}>
+                  Approve to let them log in and start submitting.
+                </Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color={colors.warning} />
+            </Pressable>
+          ) : null}
+
+          {/* ---- Pending Review Card ----
+              Worded specifically about submissions. It used to read "No students waiting /
+              You are all caught up", which claimed a blanket all-clear from a number that
+              only counts submissions — so a student sitting unapproved, having submitted
+              nothing, left it saying there was nothing to do. */}
           <View style={styles.card}>
             <View style={styles.cardRow}>
               <View style={[styles.iconCircle, { backgroundColor: '#eceef8' }]}>
@@ -88,12 +138,14 @@ export default function FacultyDashboardScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.cardTitle}>
                   {dashboard.pendingReview === 0
-                    ? 'No students waiting'
-                    : `${dashboard.pendingReview} student${dashboard.pendingReview === 1 ? '' : 's'} waiting for review`}
+                    ? 'No submissions to review'
+                    : `${dashboard.pendingReview} submission${dashboard.pendingReview === 1 ? '' : 's'} waiting for review`}
                 </Text>
                 <Text style={styles.cardSubtitle}>
                   {dashboard.pendingReview === 0
-                    ? 'You are all caught up.'
+                    ? pendingCount > 0
+                      ? 'Nothing in the review queue.'
+                      : 'You are all caught up.'
                     : 'Students are waiting on a decision.\nApproving marks their day as attended.'}
                 </Text>
               </View>
@@ -247,6 +299,19 @@ const styles = StyleSheet.create({
   },
   scopeText: { fontSize: 12, color: '#ffffffcc' },
   content: { padding: 16, gap: 14 },
+  // Same shape as `card`, with a warning edge so it reads as something to act on rather
+  // than another panel of figures.
+  alertCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.warning,
+    ...shadow.card,
+  },
   card: {
     backgroundColor: '#fff',
     borderRadius: 16,

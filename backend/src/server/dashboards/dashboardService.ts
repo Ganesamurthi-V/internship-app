@@ -136,7 +136,6 @@ export async function getFacultyDashboard(auth: AuthContext): Promise<FacultyDas
   const [
     totalStudents,
     activeStudents,
-    pendingStudents,
     pendingReview,
     submittedToday,
     approvedToday,
@@ -146,10 +145,6 @@ export async function getFacultyDashboard(auth: AuthContext): Promise<FacultyDas
     prisma.student.count({ where: scope }),
 
     prisma.student.count({ where: activeScope }),
-
-    prisma.student.count({
-      where: { AND: [scope, { user: { status: 'pending' } }] },
-    }),
 
     prisma.dailySubmission.count({
       where: { AND: [submissionScope, { status: 'pending' }] },
@@ -188,7 +183,6 @@ export async function getFacultyDashboard(auth: AuthContext): Promise<FacultyDas
     approvedToday,
     declinedToday,
     totalStudents,
-    pendingStudents,
     activeQuestions,
   };
 }
