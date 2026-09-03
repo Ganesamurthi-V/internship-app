@@ -97,21 +97,52 @@ export interface SignedDownload {
 }
 
 /**
+ * MIME types that may be served without the attachment header, for preview.
+ *
+ * Deliberately its own list rather than a reference to `ALLOWED_MIME_TYPES`. That list
+ * answers "may a student upload this?"; this one answers "may a viewer be told to
+ * render this inside our storage origin?" — and the day someone adds `image/svg+xml`
+ * or `text/html` to the upload policy, only the first answer should change. Pointing
+ * both at one constant would turn an upload-policy edit into stored XSS.
+ */
+const INLINE_RENDERABLE_MIME_TYPES: ReadonlySet<string> = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/heic',
+  'image/heif',
+]);
+
+/** Whether `mimeType` is safe to hand to a viewer with an inline disposition. */
+export function isInlineRenderable(mimeType: string | null | undefined): boolean {
+  if (!mimeType) return false;
+  // Stored values are bare types, but a `; charset=` suffix must not defeat the check.
+  const bare = mimeType.split(';')[0]?.trim().toLowerCase() ?? '';
+  return INLINE_RENDERABLE_MIME_TYPES.has(bare);
+}
+
+/**
  * Issues a signed download URL with the 15-minute TTL from 07_Security_and_Privacy §4.
  *
  * `download` forces a Content-Disposition attachment header, so a stored HTML or
  * SVG payload cannot execute in the browser's origin if it ever slipped past MIME
- * validation.
+ * validation. It stays the default for exactly that reason.
+ *
+ * `inline` drops that header so a viewer can render the file in place instead of
+ * saving it. Callers must gate it on `isInlineRenderable`, which is what keeps the
+ * mitigation above intact for everything that is not a PDF or a raster image.
  */
 export async function createSignedDownloadUrl(
   storageKey: string,
-  options?: { downloadFilename?: string },
+  options?: { downloadFilename?: string; inline?: boolean },
 ): Promise<SignedDownload> {
   const { data, error } = await supabaseAdmin()
     .storage.from(env.STORAGE_BUCKET)
-    .createSignedUrl(storageKey, env.STORAGE_DOWNLOAD_URL_TTL, {
-      download: options?.downloadFilename ?? true,
-    });
+    .createSignedUrl(
+      storageKey,
+      env.STORAGE_DOWNLOAD_URL_TTL,
+      options?.inline === true ? {} : { download: options?.downloadFilename ?? true },
+    );
 
   if (error || !data) {
     logger.error({ storageKey, error: error?.message }, 'Failed to create signed download URL');

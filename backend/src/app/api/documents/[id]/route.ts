@@ -6,6 +6,10 @@
  * needs the filename and size alongside it, and a redirect would strip the
  * Authorization header on the follow-up request anyway. Pass `?redirect=1` when a
  * plain browser redirect is wanted.
+ *
+ * Pass `?inline=1` for a preview URL — one without the Content-Disposition attachment
+ * header, so a viewer renders the file instead of saving it. The flag is a request, not
+ * a guarantee: it is ignored for types that are not safe to render in place.
  */
 
 import type { NextRequest } from 'next/server';
@@ -23,7 +27,9 @@ export const GET = withErrorHandling(async (request: NextRequest, context: Route
   const documentId = await uuidRouteParam(context, 'id');
   await assertDocumentAccess(auth, documentId, 'read');
 
-  const result = await getDownloadUrl(auth, documentId);
+  const result = await getDownloadUrl(auth, documentId, {
+    inline: request.nextUrl.searchParams.get('inline') === '1',
+  });
 
   if (request.nextUrl.searchParams.get('redirect') === '1') {
     return NextResponse.redirect(result.downloadUrl, { status: 302 });

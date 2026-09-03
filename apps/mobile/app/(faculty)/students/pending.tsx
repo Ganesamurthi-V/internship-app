@@ -8,6 +8,7 @@ import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import type { DocumentDownloadResponse } from '@ims/shared-types';
 import { Button } from '@/components/ui/Button';
 import { TextField } from '@/components/ui/TextField';
 import { DocumentViewer } from '@/components/ui/DocumentViewer';
@@ -219,15 +220,20 @@ function StudentDetailModal({
   const [opening, setOpening] = useState(false);
   const [docViewerUrl, setDocViewerUrl] = useState('');
   const [docViewerName, setDocViewerName] = useState('');
+  const [docViewerMime, setDocViewerMime] = useState('');
   const [docViewerVisible, setDocViewerVisible] = useState(false);
 
+  // `name` is only a fallback label: students upload images as often as PDFs, and the
+  // real filename and type come back with the URL. Assuming application/pdf here is what
+  // previously sent every document down the PDF path regardless of what it was.
   const openDocument = async (docId: string | null, name: string) => {
     if (!docId) { Alert.alert('No document', 'No file was uploaded.'); return; }
     setOpening(true);
     try {
-      const result = await api.get<{ downloadUrl: string }>(`/documents/${docId}`);
+      const result = await api.get<DocumentDownloadResponse>(`/documents/${docId}`, { inline: 1 });
       setDocViewerUrl(result.downloadUrl);
-      setDocViewerName(name);
+      setDocViewerName(result.originalFilename || name);
+      setDocViewerMime(result.mimeType);
       setDocViewerVisible(true);
     } catch (e) {
       Alert.alert('Could not open', e instanceof Error ? e.message : 'Try again.');
@@ -367,7 +373,7 @@ function StudentDetailModal({
           visible={docViewerVisible}
           url={docViewerUrl}
           filename={docViewerName}
-          mimeType="application/pdf"
+          mimeType={docViewerMime}
           onClose={() => setDocViewerVisible(false)}
         />
       </View>

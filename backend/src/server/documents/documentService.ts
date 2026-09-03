@@ -24,6 +24,7 @@ import {
   createSignedDownloadUrl,
   createSignedUploadUrl,
   deleteObject,
+  isInlineRenderable,
   statObject,
 } from '@/lib/storage';
 import type { AuthContext } from '@/lib/auth/context';
@@ -187,10 +188,16 @@ export async function listUnattached(auth: AuthContext): Promise<DocumentMeta[]>
   return rows.map(serializeDocument);
 }
 
-/** Mints a short-lived download URL. Authorization happens before this is called. */
+/**
+ * Mints a short-lived download URL. Authorization happens before this is called.
+ *
+ * Pass `inline` when the URL is for an in-app or in-browser preview rather than a save;
+ * see `createSignedDownloadUrl` for why that is not the default.
+ */
 export async function getDownloadUrl(
   auth: AuthContext,
   documentId: string,
+  options?: { inline?: boolean },
 ): Promise<DocumentDownloadResponse> {
   const document = await prisma.document.findFirst({
     where: { id: documentId, deletedAt: null },
@@ -205,9 +212,15 @@ export async function getDownloadUrl(
 
   if (!document) throw notFound('Document not found.');
 
-  const signed = await createSignedDownloadUrl(document.storageKey, {
-    downloadFilename: document.originalFilename,
-  });
+  // A preview URL is only issued for types a viewer can safely render in place; anything
+  // else falls back to an attachment, so asking for `inline` can never widen what a
+  // caller is allowed to have rendered.
+  const inline = options?.inline === true && isInlineRenderable(document.mimeType);
+
+  const signed = await createSignedDownloadUrl(
+    document.storageKey,
+    inline ? { inline: true } : { downloadFilename: document.originalFilename },
+  );
 
   await recordAudit({
     action: 'document_downloaded',
@@ -215,7 +228,7 @@ export async function getDownloadUrl(
     entityId: document.id,
     actorUserId: auth.userId,
     context: auth.request,
-    metadata: { filename: document.originalFilename },
+    metadata: { filename: document.originalFilename, inline },
   });
 
   return {

@@ -302,3 +302,7 @@ admin@smvec.ac.in — admin
 faculty@smvec.ac.in — faculty, CSE
 praveen@ / divya@ / arjun@smvec.ac.in — students
 npx tsx --env-file=.env prisma/check-orphan-auth-users.ts --email=someone@smvec.ac.in
+
+cd apps\mobile\android
+set NODE_ENV=production
+gradlew.bat assembleRelease
