@@ -21,9 +21,10 @@ export default function FacultyLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        // See the student layout: bottom tabs swap instantly by default, and the scene
-        // background stops the cross-fade passing through white.
-        animation: 'shift',
+        // See the student layout: bottom tabs swap instantly by default, `fade` avoids
+        // sliding the gradient header across the screen, and the scene background stops
+        // the cross-fade passing through white.
+        animation: 'fade',
         sceneStyle: { backgroundColor: colors.background },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,

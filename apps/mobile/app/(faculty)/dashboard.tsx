@@ -10,7 +10,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import type { FacultyDashboard as FacultyDashboardData } from '@ims/shared-types';
 import { FacultyDashboardSkeleton } from '@/components/ui/SkeletonLoader';
-import { FadeInView } from '@/components/ui/FadeInView';
 import { useDashboard, usePendingStudents } from '@/lib/api/hooks';
 import { useAuthStore } from '@/stores/authStore';
 import { colors, fontSize, radius, shadow, spacing } from '@/constants/theme';
@@ -62,9 +61,7 @@ export default function FacultyDashboardScreen() {
   }
 
   return (
-    // Wraps the loaded state only, so the entrance plays once the figures are ready rather
-    // than while the skeleton is up.
-    <FadeInView style={styles.container}>
+    <View style={styles.container}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -248,7 +245,7 @@ export default function FacultyDashboardScreen() {
           </View>
         </View>
       </ScrollView>
-    </FadeInView>
+    </View>
   );
 }
 

@@ -21,11 +21,16 @@ export default function StudentLayout() {
       screenOptions={{
         headerShown: false,
         /**
-         * Bottom tabs swap instantly by default, which is the single biggest reason moving
-         * around the app felt abrupt. `shift` cross-fades and nudges the outgoing screen,
-         * so a tab change reads as one surface replacing another.
+         * Bottom tabs swap instantly by default, which is what made moving around the app
+         * feel abrupt, so they cross-fade instead.
+         *
+         * `fade` and not `shift`: `shift` translates the incoming scene sideways as it
+         * fades. Every screen here opens with a full-bleed gradient header, and sliding
+         * that block across the viewport is precisely the "transition block" artifact —
+         * a coloured slab visibly travelling over the old screen. Opacity alone swaps the
+         * two surfaces in place, so nothing appears to move across the screen.
          */
-        animation: 'shift',
+        animation: 'fade',
         // Keeps the app background under the animating screens, so the cross-fade never
         // passes through white.
         sceneStyle: { backgroundColor: colors.background },

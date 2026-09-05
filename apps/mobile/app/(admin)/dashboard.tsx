@@ -10,7 +10,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api/client';
-import { FadeInView } from '@/components/ui/FadeInView';
 import { LIVE_REFETCH_INTERVAL_MS, useDashboard } from '@/lib/api/hooks';
 import { useAuthStore } from '@/stores/authStore';
 import { colors, shadow, spacing } from '@/constants/theme';
@@ -54,7 +53,7 @@ export default function AdminDashboardScreen() {
   };
 
   return (
-    <FadeInView style={styles.container}>
+    <View style={styles.container}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} tintColor={colors.primary} />}
@@ -181,7 +180,7 @@ export default function AdminDashboardScreen() {
           </View>
         </View>
       </ScrollView>
-    </FadeInView>
+    </View>
   );
 }
 

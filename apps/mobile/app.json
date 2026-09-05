@@ -6,7 +6,8 @@
     "orientation": "portrait",
     "icon": "./assets/app_logo.png",
     "scheme": "internshipmanager",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#f5f6fa",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/app_logo.png",

@@ -1,29 +1,15 @@
 /**
- * In-app document viewer for a student's uploaded verification documents.
+ * In-app document viewer for student verification documents.
  *
- * PDFs render page by page with `react-native-pdf`; images render in a WebView.
+ * PDFs are downloaded via expo-file-system (reliable on mobile networks), then rendered
+ * locally by react-native-pdf. Images render inline in a WebView.
  *
- * The PDF path used to point a WebView at `docs.google.com/gview?url=<signed url>`,
- * which was removed for two reasons:
- *
- *   - It put a credential in a third party's URL. The signed URL *is* the authorization
- *     to read a private document, so embedding it in a request to Google granted Google
- *     read access to a student's offer letter for the life of the token. `lib/storage.ts`
- *     states the rule it broke: private bucket, no public URLs, ever.
- *   - It was the only part of the chain that could fail invisibly. Everything else is
- *     ours and returns a diagnosable status; gview is an undocumented endpoint whose
- *     failures surface as a bare `net::ERR_FAILED`, which is what was reported.
- *
- * `react-native-pdf` fetches the bytes itself and rasterises them natively, so the
- * signed URL now goes only to our own storage, and a failure arrives as a real error
- * with a status attached instead of a blank Chromium page.
- *
- * The device's own viewer is kept as a fallback on the error path. A PDF this library
- * cannot parse is not necessarily one the reviewer cannot read, and an approval decision
- * should not be blocked by our choice of renderer.
+ * The previous implementation pointed a WebView at docs.google.com/gview, which leaked
+ * the signed URL to a third party and failed with net::ERR_FAILED on Android. This
+ * version keeps the credential on the direct path to Supabase Storage.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
@@ -35,6 +21,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
+import { File, Directory, Paths, DownloadTask } from 'expo-file-system';
 import Pdf from 'react-native-pdf';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { colors } from '@/constants/theme';
@@ -47,28 +34,90 @@ interface DocumentViewerProps {
   onClose: () => void;
 }
 
-/** Dark chrome, kept local so the viewer reads as an overlay rather than a screen. */
 const SURFACE = '#1a1d2e';
 
 export function DocumentViewer({ visible, url, filename, mimeType, onClose }: DocumentViewerProps) {
   const insets = useSafeAreaInsets();
 
-  // Both pieces of state are keyed by url. The component stays mounted between
-  // documents, so plain state would carry one document's error or page count onto the
-  // next one opened.
   const [failure, setFailure] = useState<{ url: string; message: string } | null>(null);
   const [paging, setPaging] = useState<{ url: string; page: number; total: number } | null>(null);
+  const [localPdf, setLocalPdf] = useState<{ url: string; path: string } | null>(null);
+  const [progress, setProgress] = useState(0);
 
   const error = failure?.url === url ? failure.message : null;
   const pages = paging?.url === url ? paging : null;
+  const pdfPath = localPdf?.url === url ? localPdf.path : null;
 
-  if (!visible || !url) return null;
+  // Tracks the URL currently being downloaded so the effect never re-enters for the
+  // same file. A `downloading` state variable cannot do this: setting it would re-run
+  // the effect, whose cleanup would then cancel the very download that set it.
+  const downloadingUrlRef = useRef<string | null>(null);
 
   const isImage =
     mimeType?.startsWith('image/') ||
     /\.(jpg|jpeg|png|gif|webp|heic|heif)$/i.test(filename ?? '');
 
   const fail = (message: string) => setFailure({ url, message });
+
+  // Download PDF to local cache using expo-file-system, which handles mobile networks
+  // reliably. react-native-pdf's built-in downloader (react-native-blob-util) throws
+  // on content-length mismatches from interrupted connections.
+  useEffect(() => {
+    if (!visible || !url || isImage || pdfPath || error) return;
+    if (downloadingUrlRef.current === url) return;
+
+    downloadingUrlRef.current = url;
+    let cancelled = false;
+    const cacheDir = new Directory(Paths.cache, 'doc-viewer');
+    const localFile = new File(cacheDir, `doc-${Date.now()}.pdf`);
+
+    const doDownload = async () => {
+      setProgress(0);
+      try {
+        if (!cacheDir.exists) {
+          cacheDir.create();
+        }
+
+        const task = new DownloadTask(url, localFile, {
+          onProgress: (p) => {
+            if (p.totalBytes > 0) {
+              setProgress(p.bytesWritten / p.totalBytes);
+            }
+          },
+        });
+
+        const result = await task.downloadAsync();
+        if (cancelled) {
+          try { localFile.delete(); } catch {}
+          return;
+        }
+
+        if (!result || !result.exists) {
+          fail('Download failed. Check your connection and try again.');
+          return;
+        }
+
+        setLocalPdf({ url, path: result.uri });
+      } catch (e) {
+        if (!cancelled) {
+          fail(e instanceof Error ? e.message : 'Download failed. Check your connection.');
+        }
+      } finally {
+        if (downloadingUrlRef.current === url) downloadingUrlRef.current = null;
+      }
+    };
+
+    void doDownload();
+    return () => { cancelled = true; };
+  }, [visible, url, isImage, pdfPath, error]);
+
+  // Clean up cached file when viewer closes
+  useEffect(() => {
+    if (!visible && localPdf) {
+      try { new File(localPdf.path).delete(); } catch {}
+      setLocalPdf(null);
+    }
+  }, [visible]);
 
   const openInDeviceViewer = async () => {
     try {
@@ -78,8 +127,6 @@ export function DocumentViewer({ visible, url, filename, mimeType, onClose }: Do
     }
   };
 
-  // The filename is deliberately not interpolated into this markup — it is attacker
-  // controlled at upload time, and the header above already displays it.
   const imageHtml = `
     <!DOCTYPE html>
     <html><head>
@@ -93,6 +140,8 @@ export function DocumentViewer({ visible, url, filename, mimeType, onClose }: Do
       <img src="${encodeURI(url)}" alt="Document" />
     </body></html>
   `;
+
+  if (!visible || !url) return null;
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -126,7 +175,11 @@ export function DocumentViewer({ visible, url, filename, mimeType, onClose }: Do
             actionLabel="Open in device viewer"
             onAction={() => void openInDeviceViewer()}
             secondaryLabel="Try again"
-            onSecondary={() => setFailure(null)}
+            onSecondary={() => {
+              downloadingUrlRef.current = null;
+              setFailure(null);
+              setLocalPdf(null);
+            }}
           />
         ) : isImage ? (
           <WebView
@@ -135,7 +188,7 @@ export function DocumentViewer({ visible, url, filename, mimeType, onClose }: Do
             originWhitelist={['*']}
             scalesPageToFit
             startInLoadingState
-            renderLoading={() => <Loading label="Loading document..." />}
+            renderLoading={() => <Loading label="Loading document..." progress={0} />}
             onError={({ nativeEvent }) =>
               fail(nativeEvent.description || 'The image could not be loaded.')
             }
@@ -147,44 +200,32 @@ export function DocumentViewer({ visible, url, filename, mimeType, onClose }: Do
               )
             }
           />
-        ) : (
+        ) : pdfPath ? (
           <Pdf
             style={styles.pdf}
-            // `cache: false` because each open mints a fresh signed URL, so a cache keyed
-            // on the URL would never hit and would just accumulate copies of private
-            // documents in the app's cache directory.
-            source={{ uri: url, cache: false }}
-            // This library defaults `trustAllCerts` to true, which disables certificate
-            // validation on the fetch it performs. Off, explicitly: the URL is a bearer
-            // credential and must not be sent over a connection we have not verified.
+            source={{ uri: pdfPath }}
             trustAllCerts={false}
             fitPolicy={0}
             spacing={8}
             enableAntialiasing
             enableDoubleTapZoom
-            renderActivityIndicator={(progress) => (
-              <Loading
-                label={
-                  progress > 0 && progress < 1
-                    ? `Loading document... ${Math.round(progress * 100)}%`
-                    : 'Loading document...'
-                }
-              />
-            )}
+            renderActivityIndicator={() => <Loading label="Rendering PDF..." progress={1} />}
             onLoadComplete={(numberOfPages) =>
               setPaging({ url, page: 1, total: numberOfPages })
             }
             onPageChanged={(page, numberOfPages) =>
               setPaging({ url, page, total: numberOfPages })
             }
-            onError={(e) => {
-              const status = (e as { status?: number }).status;
-              fail(
-                status === 400 || status === 403
-                  ? 'The preview link has expired. Close this and open the document again.'
-                  : e.message || 'The file could not be read as a PDF.',
-              );
-            }}
+            onError={(e) => fail(e.message || 'The file could not be read as a PDF.')}
+          />
+        ) : (
+          <Loading
+            label={
+              progress > 0 && progress < 1
+                ? `Downloading... ${Math.round(progress * 100)}%`
+                : 'Downloading document...'
+            }
+            progress={progress}
           />
         )}
       </View>
@@ -231,11 +272,16 @@ function Message({
   );
 }
 
-function Loading({ label }: { label: string }) {
+function Loading({ label, progress }: { label: string; progress: number }) {
   return (
     <View style={styles.loading}>
       <ActivityIndicator size="large" color={colors.primary} />
       <Text style={styles.loadingText}>{label}</Text>
+      {progress > 0 && progress < 1 ? (
+        <View style={styles.progressBar}>
+          <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -324,4 +370,17 @@ const styles = StyleSheet.create({
     backgroundColor: SURFACE,
   },
   loadingText: { color: '#ffffff99', fontSize: 13, marginTop: 12 },
+  progressBar: {
+    width: 200,
+    height: 3,
+    backgroundColor: '#ffffff20',
+    borderRadius: 2,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+    borderRadius: 2,
+  },
 });

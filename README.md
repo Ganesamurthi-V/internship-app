@@ -304,5 +304,7 @@ praveen@ / divya@ / arjun@smvec.ac.in — students
 npx tsx --env-file=.env prisma/check-orphan-auth-users.ts --email=someone@smvec.ac.in
 
 cd apps\mobile\android
+.\gradlew.bat clean
 set NODE_ENV=production
-gradlew.bat assembleRelease
+.\gradlew.bat assembleRelease
+
