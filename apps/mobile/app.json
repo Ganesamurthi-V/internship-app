@@ -59,7 +59,8 @@
         {
           "universalApk": false
         }
-      ]
+      ],
+      "./plugins/with-android-release-signing"
     ],
     "experiments": {
       "typedRoutes": true

@@ -1,56 +1,150 @@
 /**
  * Supabase client for the mobile app.
  *
- * SESSION STORAGE: in memory, deliberately.
+ * SESSION STORAGE: encrypted, on the device keychain, split across several keys.
  *
- * Two native-backed options were tried and rejected. `expo-secure-store` caps a
- * single value at 2048 bytes and a Supabase session exceeds that, so writes failed
- * silently and login appeared to succeed then immediately sign out.
- * `@react-native-async-storage/async-storage` v3 throws `Native module is null` in
- * Expo Go. The adapter below is therefore a plain `Map`.
+ * This used to be a plain `Map`, which meant the session lived only as long as the JS
+ * context. It survived a hot reload but not a force-quit, so every user signed in again
+ * on every cold start.
  *
- * Consequence worth knowing: the session survives a hot reload (same JS context)
- * but not a full app kill, so the user signs in again after force-quitting. That is
- * acceptable for development and is the one thing to change before shipping —
- * either a SecureStore adapter that chunks the value across several keys, or
- * AsyncStorage v2 in a development build.
+ * `expo-secure-store` is the right home for a refresh token — Keychain on iOS, the
+ * EncryptedSharedPreferences-backed store on Android — but it caps a single value at
+ * 2048 bytes, and a Supabase session is bigger than that: two JWTs plus the whole user
+ * object with both metadata bags. Writing it whole is what failed silently before, and a
+ * silent write failure reads back as "signed out" a moment after a successful login.
+ *
+ * So the value is chunked. `<key>` holds the number of chunks and `<key>.0…n` hold the
+ * pieces, which keeps every individual write comfortably inside the cap.
+ *
+ * `@react-native-async-storage/async-storage` was the other candidate and is rejected on
+ * two counts: it stores auth tokens in the clear, and v3 throws `Native module is null`
+ * in Expo Go.
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 
+const isWeb = Platform.OS === 'web' && typeof window !== 'undefined';
+
 /**
- * In-memory storage that works everywhere without native modules.
+ * Characters per chunk.
  *
- * Sessions persist across hot reloads (Metro keeps the JS context alive) but not
- * across full app restarts. For development this is fine; for production builds,
- * swap this out for a native-backed adapter.
+ * SecureStore's limit is 2048 *bytes* while this splits a JavaScript *string*, and the two
+ * only agree for ASCII. A session is nearly all ASCII — JWTs, UUIDs, timestamps — but a
+ * student's name sits inside the user object and can be anything, so the size is chosen
+ * against the worst case rather than the typical one: three UTF-8 bytes per UTF-16 code
+ * unit puts 600 characters at 1800 bytes, still inside the cap.
+ *
+ * The cost of being conservative is a handful of extra keychain entries per sign-in, which
+ * is not worth measuring byte lengths to avoid.
  */
-const memoryStorage = new Map<string, string>();
+const CHUNK_SIZE = 600;
+
+/**
+ * Last-resort store for when the keychain cannot be reached.
+ *
+ * Chosen over letting the error propagate: a failed keychain read would otherwise abort
+ * `getSession()` and strand the user on a blank screen. Falling back to memory degrades to
+ * the old behaviour — signed in until the app is killed — instead of not working at all.
+ */
+const memoryFallback = new Map<string, string>();
+
+function chunkKey(key: string, index: number): string {
+  return `${key}.${index}`;
+}
+
+async function readChunkCount(key: string): Promise<number> {
+  const raw = await SecureStore.getItemAsync(key);
+  if (raw === null) return 0;
+  const count = Number.parseInt(raw, 10);
+  return Number.isInteger(count) && count > 0 ? count : 0;
+}
+
+async function deleteChunks(key: string, count: number): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await SecureStore.deleteItemAsync(chunkKey(key, index));
+  }
+}
 
 const storageAdapter = {
-  getItem: (key: string): string | null => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      return window.localStorage.getItem(key);
+  async getItem(key: string): Promise<string | null> {
+    if (isWeb) return window.localStorage.getItem(key);
+
+    try {
+      const count = await readChunkCount(key);
+      if (count === 0) return memoryFallback.get(key) ?? null;
+
+      const parts: string[] = [];
+      for (let index = 0; index < count; index += 1) {
+        const part = await SecureStore.getItemAsync(chunkKey(key, index));
+        // A missing piece means a write was interrupted. Half a session is not a session,
+        // and returning it would hand Supabase malformed JSON, so treat it as absent and
+        // let the user sign in again.
+        if (part === null) return null;
+        parts.push(part);
+      }
+      return parts.join('');
+    } catch {
+      return memoryFallback.get(key) ?? null;
     }
-    return memoryStorage.get(key) ?? null;
   },
-  setItem: (key: string, value: string): void => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+
+  async setItem(key: string, value: string): Promise<void> {
+    if (isWeb) {
       window.localStorage.setItem(key, value);
       return;
     }
-    memoryStorage.set(key, value);
+
+    // Mirrored unconditionally so a later keychain failure still has something to read
+    // within this run of the app.
+    memoryFallback.set(key, value);
+
+    try {
+      const previousCount = await readChunkCount(key);
+
+      const chunks: string[] = [];
+      for (let offset = 0; offset < value.length; offset += CHUNK_SIZE) {
+        chunks.push(value.slice(offset, offset + CHUNK_SIZE));
+      }
+
+      for (let index = 0; index < chunks.length; index += 1) {
+        await SecureStore.setItemAsync(chunkKey(key, index), chunks[index]!);
+      }
+
+      // The count is written last, so an interrupted write leaves the old count pointing at
+      // chunks that still exist rather than a new count pointing at chunks that do not.
+      await SecureStore.setItemAsync(key, String(chunks.length));
+
+      // A shorter session than last time would otherwise leave the tail behind. Harmless to
+      // read past, but it is stale token material sitting in the keychain.
+      for (let index = chunks.length; index < previousCount; index += 1) {
+        await SecureStore.deleteItemAsync(chunkKey(key, index));
+      }
+    } catch {
+      // Keychain unavailable. The memory mirror above keeps this session usable.
+    }
   },
-  removeItem: (key: string): void => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+
+  async removeItem(key: string): Promise<void> {
+    if (isWeb) {
       window.localStorage.removeItem(key);
       return;
     }
-    memoryStorage.delete(key);
+
+    memoryFallback.delete(key);
+
+    try {
+      const count = await readChunkCount(key);
+      await deleteChunks(key, count);
+      await SecureStore.deleteItemAsync(key);
+    } catch {
+      // Nothing actionable: the in-memory copy is already gone, and `logout()` clears the
+      // token cache regardless.
+    }
   },
 };
 

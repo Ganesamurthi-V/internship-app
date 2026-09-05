@@ -15,7 +15,26 @@ import Constants from 'expo-constants';
 import type { ApiErrorCode, Pagination } from '@ims/shared-types';
 import { getAccessToken } from '@/lib/supabase';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000/api';
+/**
+ * Base URL for every request, inlined by Metro when the bundle is built.
+ *
+ * There is no production fallback on purpose. `EXPO_PUBLIC_*` values are substituted at
+ * bundle time, not read at launch, so a build made without `apps/mobile/.env` — which is
+ * gitignored, so any fresh clone or CI job qualifies — compiles `undefined` here and cannot
+ * be corrected without rebuilding.
+ *
+ * The old default was `http://localhost:3000/api`. On a phone that resolves to the phone
+ * itself, so every request failed with a connection error indistinguishable from bad
+ * signal: the one misconfiguration that most deserves to be obvious looked exactly like
+ * the most common ordinary fault. Left empty, `assertConfigured` names the cause instead.
+ *
+ * Development keeps the localhost default, because that is genuinely where the API runs.
+ */
+// `||` rather than `??`: a variable present but blank — `EXPO_PUBLIC_API_URL=` with nothing
+// after it, which is easy to leave behind while editing — is unset for every purpose that
+// matters here, and `??` would accept it and skip the development default.
+const configuredApiUrl = process.env.EXPO_PUBLIC_API_URL;
+const API_URL = configuredApiUrl || (__DEV__ ? 'http://localhost:3000/api' : '');
 const APP_VERSION = Constants.expoConfig?.version ?? '1.0.0';
 
 /** Error thrown by every client method on a non-2xx response. */
@@ -70,6 +89,25 @@ function baseHeaders(): Record<string, string> {
  * Raised as an `ApiError` so every existing `catch (e) { e instanceof ApiError }` path
  * handles it like any other failure.
  */
+/**
+ * Refuses to make a request when the build has no API URL.
+ *
+ * Called before the `fetch` rather than inside `buildUrl`, because `buildUrl` is evaluated
+ * inside the try block that relabels anything thrown as `NETWORK_ERROR` — which would bury
+ * this behind the same "check your connection" message the empty URL was causing in the
+ * first place.
+ */
+function assertConfigured(): void {
+  if (API_URL) return;
+  throw new ApiError({
+    code: 'SERVER_ERROR',
+    message:
+      'This build has no API server configured. EXPO_PUBLIC_API_URL was missing when it ' +
+      'was bundled — see apps/mobile/.env.example — and it cannot be set without rebuilding.',
+    status: 0,
+  });
+}
+
 function malformedResponse(status: number): ApiError {
   return new ApiError({
     code: 'SERVER_ERROR',
@@ -100,6 +138,8 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, query, anonymous = false, signal } = options;
+
+  assertConfigured();
 
   const headers = baseHeaders();
 
@@ -166,6 +206,8 @@ async function requestList<T>(
   options: RequestOptions = {},
 ): Promise<{ items: T[]; pagination: Pagination }> {
   const { method = 'GET', body, query, signal } = options;
+
+  assertConfigured();
 
   const headers = baseHeaders();
   const token = await getAccessToken();

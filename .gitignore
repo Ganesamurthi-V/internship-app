@@ -54,4 +54,20 @@ backend/tmp/
 exports/
 
 .vercel
+
+# Appended by `vercel link`. `.env*` is broader than the block at the top of this file and
+# sits after it, so it silently re-ignored `.env.example` — gitignore takes the last match,
+# not the most specific. The negation is repeated here so the committed template survives
+# no matter which rule matched it. Root `.env.example` only stayed visible because it was
+# already tracked; a new one would have been invisible.
 .env*
+!.env.example
+
+# Android release signing. The keystore IS the app's identity: lose it and no future build
+# can update an installed app, leak it and anyone can publish one that looks like yours.
+# Neither it nor the passwords belong in the repository.
+*.jks
+*.keystore
+!apps/mobile/android/app/debug.keystore
+keystore.properties
+signing.properties
