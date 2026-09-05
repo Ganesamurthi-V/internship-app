@@ -58,7 +58,13 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
     email: input.email,
     password: input.password,
     email_confirm: true,
-    user_metadata: { role: 'faculty', name: input.name },
+    user_metadata: { name: input.name },
+    // `app_metadata`, not `user_metadata`. Only the service role can write this, so it is
+    // the one role claim in the token a client may trust. `user_metadata` is writable by
+    // the account holder via `updateUser`, which meant the mobile app's offline fallback
+    // was reading a role its owner could set. The database stays authoritative — this is
+    // the fallback for when `/auth/me` cannot be reached.
+    app_metadata: { role: 'faculty' },
   });
 
   if (authError) {

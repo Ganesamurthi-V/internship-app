@@ -40,6 +40,31 @@ const TYPE_OPTIONS = QUESTION_TYPES.map((type) => ({
   label: QUESTION_TYPE_LABELS[type],
 }));
 
+/** One editable row in the choice-option editor. */
+interface ChoiceOption {
+  id: string;
+  value: string;
+}
+
+/**
+ * Row identity for the option editor.
+ *
+ * A question's options are a plain `string[]` on the wire, so there is no id to reuse, and
+ * the rows were keyed by array index. Removing a middle option then shifted every row below
+ * it onto a different React element: the controlled `value` still rendered correctly, but
+ * focus and any in-progress keyboard composition belonged to the index rather than the
+ * option, so they jumped to whichever option slid up into that position.
+ *
+ * A counter rather than a uuid — these ids never leave this screen and are never stored, so
+ * they only have to stay distinct for the life of the form.
+ */
+let nextOptionId = 0;
+
+function newOption(value = ''): ChoiceOption {
+  nextOptionId += 1;
+  return { id: `option-${nextOptionId}`, value };
+}
+
 export default function QuestionsScreen() {
   const insets = useSafeAreaInsets();
   const { data: questions, isLoading, refetch } = useQuestions(false);
@@ -56,7 +81,11 @@ export default function QuestionsScreen() {
   const [type, setType] = useState<QuestionType>('long_text');
   const typeWordBounds = wordBoundsForQuestionType(type);
   const [required, setRequired] = useState(true);
-  const [choiceOptions, setChoiceOptions] = useState<string[]>(['', '']);
+  // Lazy initialiser, so the two starting rows are minted once rather than on every render.
+  const [choiceOptions, setChoiceOptions] = useState<ChoiceOption[]>(() => [
+    newOption(),
+    newOption(),
+  ]);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const active = (questions ?? []).filter((q) => q.isActive);
@@ -66,7 +95,7 @@ export default function QuestionsScreen() {
     setHelpText('');
     setType('long_text');
     setRequired(true);
-    setChoiceOptions(['', '']);
+    setChoiceOptions([newOption(), newOption()]);
     setErrors({});
     setShowForm(false);
     setEditingId(null);
@@ -82,7 +111,7 @@ export default function QuestionsScreen() {
 
     const options =
       type === 'choice'
-        ? choiceOptions.map((opt) => opt.trim()).filter((opt) => opt.length > 0)
+        ? choiceOptions.map((opt) => opt.value.trim()).filter((value) => value.length > 0)
         : undefined;
 
     if (type === 'choice' && (!options || options.length < 2)) {
@@ -135,7 +164,11 @@ export default function QuestionsScreen() {
     setHelpText(question.helpText ?? '');
     setType(question.type);
     setRequired(question.required);
-    setChoiceOptions(question.options && question.options.length > 0 ? [...question.options] : ['', '']);
+    setChoiceOptions(
+      question.options && question.options.length > 0
+        ? question.options.map((value) => newOption(value))
+        : [newOption(), newOption()],
+    );
     setShowForm(true);
     // Store the editing question id so we can update instead of create
     setEditingId(question.id);
@@ -289,22 +322,29 @@ export default function QuestionsScreen() {
                   Options <Text style={styles.requiredStar}>*</Text>
                 </Text>
                 {choiceOptions.map((option, index) => (
-                  <View key={index} style={styles.optionRow}>
+                  <View key={option.id} style={styles.optionRow}>
                     <View style={{ flex: 1 }}>
                       <TextField
                         label=""
-                        value={option}
-                        onChangeText={(text) => {
-                          const next = [...choiceOptions];
-                          next[index] = text;
-                          setChoiceOptions(next);
-                        }}
+                        value={option.value}
+                        // Matched by id rather than the index captured at render, so an edit
+                        // lands on the row the user is actually typing in even if the list
+                        // shifted underneath.
+                        onChangeText={(text) =>
+                          setChoiceOptions((prev) =>
+                            prev.map((entry) =>
+                              entry.id === option.id ? { ...entry, value: text } : entry,
+                            ),
+                          )
+                        }
                         placeholder={`Option ${index + 1}`}
                       />
                     </View>
                     {choiceOptions.length > 2 ? (
                       <Pressable
-                        onPress={() => setChoiceOptions(choiceOptions.filter((_, i) => i !== index))}
+                        onPress={() =>
+                          setChoiceOptions((prev) => prev.filter((entry) => entry.id !== option.id))
+                        }
                         style={styles.removeOptionBtn}
                       >
                         <MaterialIcons name="close" size={18} color={colors.danger} />
@@ -315,7 +355,7 @@ export default function QuestionsScreen() {
                 {choiceOptions.length < 10 && (
                   <Pressable
                     style={styles.addOptionBtn}
-                    onPress={() => setChoiceOptions([...choiceOptions, ''])}
+                    onPress={() => setChoiceOptions((prev) => [...prev, newOption()])}
                   >
                     <MaterialIcons name="add-circle-outline" size={16} color={colors.primary} />
                     <Text style={styles.addOptionText}>Add option</Text>

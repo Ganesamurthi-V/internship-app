@@ -57,7 +57,10 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
     email: input.studentEmail,
     password: mobile,
     email_confirm: true,
-    user_metadata: { role: 'student', name: input.name },
+    user_metadata: { name: input.name },
+    // Service-role-only, unlike `user_metadata` which the holder can rewrite. See the note
+    // in create-faculty: this is the role claim the mobile fallback is allowed to believe.
+    app_metadata: { role: 'student' },
   });
 
   // Supabase Auth lives in `auth.users`, a different table from `public.users`.
@@ -85,7 +88,8 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
       email: input.studentEmail,
       password: mobile,
       email_confirm: true,
-      user_metadata: { role: 'student', name: input.name },
+      user_metadata: { name: input.name },
+      app_metadata: { role: 'student' },
     }));
   }
 

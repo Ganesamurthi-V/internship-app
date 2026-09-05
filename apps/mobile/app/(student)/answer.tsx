@@ -71,6 +71,14 @@ export default function AnswerScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const questionOffsets = useRef<Record<string, number>>({});
 
+  /**
+   * Id of the submission already copied into the form.
+   *
+   * A ref rather than state: it must not trigger a render, and it has to survive the
+   * refetches that would otherwise re-seed over the student's typing.
+   */
+  const seededSubmissionRef = useRef<string | null>(null);
+
   const [docViewerUrl, setDocViewerUrl] = useState('');
   const [docViewerName, setDocViewerName] = useState('');
   const [docViewerMime, setDocViewerMime] = useState('application/pdf');
@@ -95,11 +103,28 @@ export default function AnswerScreen() {
    * decline.
    */
   useEffect(() => {
-    if (!form?.submission) return;
+    const submission = form?.submission;
+    if (!submission) return;
+
+    // Seed once per submission, not once per response object.
+    //
+    // `useTodayForm` inherits `staleTime: 0` and `refetchOnMount: 'always'`, and the root
+    // layout refetches everything when the app returns to the foreground. Keying this
+    // effect on the object alone meant any refetch that came back differing in a single
+    // field — a reviewer acting concurrently, a changed `updatedAt` — re-ran the seed and
+    // replaced whatever the student had typed with the values they last submitted. React
+    // Query's structural sharing hid it whenever the response was byte-identical, which is
+    // what made it intermittent rather than obvious.
+    //
+    // The id still changes for a genuinely different submission — another day, or a
+    // granted retake — so those seed as before.
+    if (seededSubmissionRef.current === submission.id) return;
+    seededSubmissionRef.current = submission.id;
+
     const seeded: Record<string, string> = {};
     const seededFiles: Record<string, DocumentMeta> = {};
 
-    for (const answer of form.submission.answers) {
+    for (const answer of submission.answers) {
       seeded[answer.questionId] = answer.answerText;
       // A file answer carries its document, so an already-uploaded file shows its
       // real name and stays viewable after a reload instead of reading
@@ -597,7 +622,15 @@ function QuestionField({
             {editable ? (
               <Text
                 style={styles.changeLink}
-                onPress={() => onChange('')}
+                // Opens the picker rather than clearing the answer first.
+                //
+                // `onChange('')` used to strand the student here: it emptied the answer but
+                // left this question's entry in `uploadedFileMap`, so `fileInfo` stayed
+                // truthy, this same row re-rendered, and the "Choose file" button below was
+                // unreachable — leaving a question that could neither be answered nor
+                // replaced. Picking straight away also means a cancelled picker keeps the
+                // file that was already attached.
+                onPress={() => onChange('__pick_file__')}
                 accessibilityRole="button"
               >
                 Change
@@ -613,7 +646,10 @@ function QuestionField({
             {editable ? (
               <Text
                 style={styles.changeLink}
-                onPress={() => onChange('')}
+                // Same one-step replace as the branch above. Clearing worked here, because
+                // there is no `fileInfo` to strand the row, but it still cost the student a
+                // second tap and briefly left the question unanswered.
+                onPress={() => onChange('__pick_file__')}
                 accessibilityRole="button"
               >
                 Change

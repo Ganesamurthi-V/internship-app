@@ -29,8 +29,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png",
         "backgroundColor": "#414fb8"
       },
-      "permissions": [],
-      "edgeToEdgeEnabled": true
+      "permissions": []
     },
     "web": {
       "favicon": "./assets/app_logo.png"

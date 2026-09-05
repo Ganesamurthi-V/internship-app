@@ -14,7 +14,9 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:reset": "prisma migrate reset",
     "prisma:studio": "prisma studio",
-    "prisma:seed": "prisma db seed"
+    "prisma:seed": "prisma db seed",
+    "backfill:auth-role": "tsx --env-file=.env prisma/backfill-auth-role.ts",
+    "cleanup:orphan-auth": "tsx --env-file=.env prisma/cleanup-orphan-auth-users.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

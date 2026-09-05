@@ -59,6 +59,25 @@ function baseHeaders(): Record<string, string> {
   };
 }
 
+/**
+ * A 2xx response whose body was not the `{ data }` envelope this API always sends.
+ *
+ * It happens when something other than our server answers with a success status: a captive
+ * portal, a proxy, or a platform error page. `response.json()` fails, the payload is null,
+ * and reading `.data` off it throws a raw `TypeError` that no caller is catching — the
+ * screen dies rather than showing a message.
+ *
+ * Raised as an `ApiError` so every existing `catch (e) { e instanceof ApiError }` path
+ * handles it like any other failure.
+ */
+function malformedResponse(status: number): ApiError {
+  return new ApiError({
+    code: 'SERVER_ERROR',
+    message: 'The server sent a response the app could not read. Try again.',
+    status,
+  });
+}
+
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
@@ -133,6 +152,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     });
   }
 
+  // `in` rather than a truthiness check, so an endpoint that legitimately answers
+  // `{ data: null }` is still treated as a successful response.
+  if (payload === null || typeof payload !== 'object' || !('data' in payload)) {
+    throw malformedResponse(response.status);
+  }
+
   return (payload as { data: T }).data;
 }
 
@@ -177,9 +202,31 @@ async function requestList<T>(
     });
   }
 
+  // A 204 has no body to parse, and for a list that genuinely means "nothing here".
+  if (response.status === 204) {
+    return { items: [], pagination: { page: 1, pageSize: 0, total: 0, totalPages: 0 } };
+  }
+
+  // An unreadable body is not an empty list. Falling back to `[]` rendered "no results" on
+  // every screen that shows one — a faculty reviewer would see an empty review queue and
+  // reasonably conclude there was nothing waiting, which is worse than an error.
+  if (payload === null || !Array.isArray(payload.data)) {
+    throw malformedResponse(response.status);
+  }
+
+  const items = payload.data;
+
   return {
-    items: payload?.data ?? [],
-    pagination: payload?.pagination ?? { page: 1, pageSize: 0, total: 0, totalPages: 0 },
+    items,
+    // Derived from what actually arrived rather than zeroed. A missing `pagination` with
+    // `total: 0` alongside a non-empty `items` is a contradiction, and anything showing a
+    // count from it would report none while the list underneath was populated.
+    pagination: payload.pagination ?? {
+      page: 1,
+      pageSize: items.length,
+      total: items.length,
+      totalPages: 1,
+    },
   };
 }
 

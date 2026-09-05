@@ -22,7 +22,6 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { File, Directory, Paths, DownloadTask } from 'expo-file-system';
-import Pdf from 'react-native-pdf';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { colors } from '@/constants/theme';
 
@@ -35,6 +34,37 @@ interface DocumentViewerProps {
 }
 
 const SURFACE = '#1a1d2e';
+
+/**
+ * `react-native-pdf`, resolved on first use instead of imported at module scope.
+ *
+ * It depends on `react-native-blob-util`, whose `fs.js` calls `getConstants()` on its
+ * native module while the module is still being evaluated. That lookup uses
+ * `TurboModuleRegistry.get`, which returns `null` rather than throwing when the module is
+ * absent from the binary — so the call becomes `null.getConstants()` and the import throws.
+ *
+ * A static import puts that throw in the import graph of every screen that shows a
+ * document, and it took out three unrelated routes at once (review detail, pending
+ * approvals, the answer form). Each was reported only as "missing the required default
+ * export", because the module never finished evaluating and so never assigned one.
+ *
+ * Requiring it here moves that failure inside a `try` and confines it to the PDF branch:
+ * the surrounding screen still loads and the viewer offers the device's own PDF app. A
+ * renderer for an optional preview should not be a hard dependency of a review workflow.
+ */
+type PdfComponent = typeof import('react-native-pdf').default;
+let cachedPdf: PdfComponent | null | undefined;
+
+function resolvePdfRenderer(): PdfComponent | null {
+  if (cachedPdf !== undefined) return cachedPdf;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    cachedPdf = (require('react-native-pdf') as { default: PdfComponent }).default;
+  } catch {
+    cachedPdf = null;
+  }
+  return cachedPdf;
+}
 
 export function DocumentViewer({ visible, url, filename, mimeType, onClose }: DocumentViewerProps) {
   const insets = useSafeAreaInsets();
@@ -57,6 +87,11 @@ export function DocumentViewer({ visible, url, filename, mimeType, onClose }: Do
     mimeType?.startsWith('image/') ||
     /\.(jpg|jpeg|png|gif|webp|heic|heif)$/i.test(filename ?? '');
 
+  // Resolved during render rather than in an effect, so the download below can be skipped
+  // entirely when there is nothing able to display the result.
+  const Pdf = isImage ? null : resolvePdfRenderer();
+  const canRenderPdf = Pdf !== null;
+
   const fail = (message: string) => setFailure({ url, message });
 
   // Download PDF to local cache using expo-file-system, which handles mobile networks
@@ -64,6 +99,8 @@ export function DocumentViewer({ visible, url, filename, mimeType, onClose }: Do
   // on content-length mismatches from interrupted connections.
   useEffect(() => {
     if (!visible || !url || isImage || pdfPath || error) return;
+    // No renderer means the bytes have nowhere to go; the device viewer fetches its own.
+    if (!canRenderPdf) return;
     if (downloadingUrlRef.current === url) return;
 
     downloadingUrlRef.current = url;
@@ -109,7 +146,7 @@ export function DocumentViewer({ visible, url, filename, mimeType, onClose }: Do
 
     void doDownload();
     return () => { cancelled = true; };
-  }, [visible, url, isImage, pdfPath, error]);
+  }, [visible, url, isImage, pdfPath, error, canRenderPdf]);
 
   // Clean up cached file when viewer closes
   useEffect(() => {
@@ -199,6 +236,16 @@ export function DocumentViewer({ visible, url, filename, mimeType, onClose }: Do
                   : `The image could not be loaded (HTTP ${nativeEvent.statusCode}).`,
               )
             }
+          />
+        ) : !Pdf ? (
+          <Message
+            icon="picture-as-pdf"
+            tint="#ffffffcc"
+            title={filename ?? 'PDF document'}
+            body="This build cannot preview PDFs in the app. Opens in your device's PDF viewer instead."
+            actionIcon="open-in-new"
+            actionLabel="Open in device viewer"
+            onAction={() => void openInDeviceViewer()}
           />
         ) : pdfPath ? (
           <Pdf

@@ -52,7 +52,7 @@ function todayString(): string {
 async function ensureAuthUser(
   email: string,
   password: string,
-  metadata?: Record<string, unknown>,
+  appMetadata?: Record<string, unknown>,
 ): Promise<string> {
   const { data: existingUsers } = await supabase.auth.admin.listUsers({ perPage: 1000 });
   const existing = existingUsers?.users?.find((user) => user.email === email);
@@ -62,7 +62,13 @@ async function ensureAuthUser(
     email,
     password,
     email_confirm: true,
-    user_metadata: metadata ?? {},
+    // `app_metadata`, not `user_metadata`: only the service role can write it, so it is the
+    // one role claim the mobile client may trust when `/auth/me` is unreachable.
+    // `user_metadata` is rewritable by the account holder with nothing but the anon key.
+    //
+    // Note the early return above — an account that already exists keeps whatever metadata
+    // it was created with, so accounts seeded before this change need a one-off backfill.
+    app_metadata: appMetadata ?? {},
   });
 
   if (error) {

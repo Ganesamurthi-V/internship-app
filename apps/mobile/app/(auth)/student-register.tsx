@@ -192,7 +192,35 @@ export default function StudentRegisterScreen() {
     promiseRef.current = promise;
   };
 
-  const fmtDate = (d: Date): string => d.toISOString().slice(0, 10);
+  /**
+   * A local calendar date as `YYYY-MM-DD`.
+   *
+   * Built from the local getters rather than `toISOString().slice(0, 10)`. The picker hands
+   * back local midnight and `toISOString` converts to UTC first, so in any zone ahead of
+   * UTC that lands on the previous day: in IST a student picking 5 September stored
+   * 4 September, for both the start and the end of their internship.
+   *
+   * `lib/utils/dates.ts` documents the mirror image of this hazard for *reading* a date the
+   * API sent. This is the same rule applied on the way out.
+   */
+  const fmtDate = (d: Date): string => {
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${month}-${day}`;
+  };
+
+  /**
+   * Inverse of `fmtDate`, so the picker reopens on the day that was stored.
+   *
+   * `new Date('2026-09-05')` is parsed as UTC midnight, which renders as the 4th on any
+   * device behind UTC. Passing the parts to the constructor builds local midnight instead,
+   * which round-trips exactly with `fmtDate`.
+   */
+  const parseDateOnly = (value: string): Date => {
+    const [year, month, day] = value.split('-').map(Number);
+    if (!year || !month || !day) return new Date();
+    return new Date(year, month - 1, day);
+  };
 
   /** Calculate days between two date strings (YYYY-MM-DD). */
   const calcDuration = (start: string, end: string): string => {
@@ -526,7 +554,7 @@ export default function StudentRegisterScreen() {
                   </Text>
                 </Pressable>
                 {showStartDate && (
-                  <DateTimePicker value={form.startDate ? new Date(form.startDate) : new Date()}
+                  <DateTimePicker value={form.startDate ? parseDateOnly(form.startDate) : new Date()}
                     mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                     onValueChange={(_, d) => { setShowStartDate(Platform.OS === 'ios'); if (d) { set('startDate', fmtDate(d)); set('totalDuration', calcDuration(fmtDate(d), form.endDate)); } }} />
                 )}
@@ -541,7 +569,7 @@ export default function StudentRegisterScreen() {
                   </Text>
                 </Pressable>
                 {showEndDate && (
-                  <DateTimePicker value={form.endDate ? new Date(form.endDate) : new Date()}
+                  <DateTimePicker value={form.endDate ? parseDateOnly(form.endDate) : new Date()}
                     mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                     onValueChange={(_, d) => { setShowEndDate(Platform.OS === 'ios'); if (d) { set('endDate', fmtDate(d)); set('totalDuration', calcDuration(form.startDate, fmtDate(d))); } }} />
                 )}

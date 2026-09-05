@@ -125,12 +125,24 @@ export default function RootLayout() {
    * what makes two things work: polling queries pause while the app is
    * backgrounded instead of burning battery, and everything refetches the moment
    * the user comes back, so a screen never shows numbers from ten minutes ago.
+   *
+   * The same transition re-reads the identity. `bootstrap` falls back to a provisional
+   * identity when `/auth/me` cannot be reached, and that fallback deliberately assumes the
+   * least privilege it can rather than trusting a role the account holder could have
+   * written. Without a retry the guess would stick for the whole session — a faculty member
+   * who launched with no signal would sit in the student area until they killed the app,
+   * because `refreshUser` existed but nothing ever called it. Coming back to the
+   * foreground is the natural moment to ask again.
    */
   useEffect(() => {
     focusManager.setFocused(AppState.currentState === 'active');
 
     const subscription = AppState.addEventListener('change', (status: AppStateStatus) => {
-      focusManager.setFocused(status === 'active');
+      const active = status === 'active';
+      focusManager.setFocused(active);
+      // No-ops when signed out, and keeps `status` and `role` current for a session that
+      // was suspended or re-scoped while the app sat in the background.
+      if (active) void useAuthStore.getState().refreshUser();
     });
 
     return () => subscription.remove();

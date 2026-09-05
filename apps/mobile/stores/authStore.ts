@@ -12,6 +12,7 @@
 
 import { create } from 'zustand';
 import type { AuthenticatedUser, UserRole } from '@ims/shared-types';
+import { USER_ROLES } from '@ims/shared-types';
 import { getSupabase } from '@/lib/supabase';
 import { api } from '@/lib/api/client';
 
@@ -31,27 +32,64 @@ interface AuthState {
 }
 
 /**
- * Builds an identity from the Supabase session alone.
+ * Builds a provisional identity from the Supabase session alone.
  *
- * Used when the backend is unreachable. The role comes from `user_metadata`, which
- * the seed script sets at account creation. This keeps the app usable offline and
- * during local development when the API server is not running — the alternative
- * (treating a valid session as signed out) is far more confusing.
+ * Used when `/auth/me` is unreachable, so a valid session is not thrown away over a
+ * network blip — treating it as signed out is far more confusing than showing an error
+ * inside the app.
+ *
+ * WHY THE ROLE IS NOT READ FROM `user_metadata`
+ *
+ * It used to be, and that was a privilege problem. `user_metadata` is writable by the
+ * account holder with nothing but the anon key:
+ *
+ *     supabase.auth.updateUser({ data: { role: 'admin' } })
+ *
+ * so a student could name their own role, and a failing `/auth/me` — airplane mode at
+ * launch is enough — would route them into the admin area. Every screen there still reads
+ * from the API, which authorises server-side, so no data actually leaked. But the app was
+ * deciding who someone was from a field they control, which is the wrong shape regardless
+ * of what saves it downstream.
+ *
+ * `app_metadata` is the counterpart only the service role can write, so it is the one
+ * claim in the token worth trusting. When it is missing — an account created before the
+ * backend started setting it — this falls back to the least privilege it can, rather than
+ * to whatever the holder would like to be. `refreshUser()` on foreground replaces the
+ * guess with the server's answer, so a faculty member never stays parked in the student
+ * area.
  */
 function identityFromSession(session: {
-  user: { id: string; email?: string | undefined; user_metadata?: Record<string, unknown> };
+  user: {
+    id: string;
+    email?: string | undefined;
+    user_metadata?: Record<string, unknown>;
+    app_metadata?: Record<string, unknown>;
+  };
 }): AuthenticatedUser {
-  const metadata = session.user.user_metadata ?? {};
+  const userMetadata = session.user.user_metadata ?? {};
+  const appMetadata = session.user.app_metadata ?? {};
   const email = session.user.email ?? '';
+
+  // Validated against the enum rather than cast. A cast would let any string through as a
+  // `UserRole` and put an unroutable value into the guards.
+  const claimed = appMetadata.role;
+  const role: UserRole =
+    typeof claimed === 'string' && (USER_ROLES as readonly string[]).includes(claimed)
+      ? (claimed as UserRole)
+      : 'student';
 
   return {
     id: session.user.id,
     email,
-    role: ((metadata.role as string) ?? 'student') as UserRole,
-    name: (metadata.name as string) ?? email.split('@')[0] ?? 'User',
-    // Assumed active: the session would not exist otherwise. A suspended account is
-    // caught by the API on the first real request.
-    status: 'active',
+    // Display only, so `user_metadata` is fine here: the worst a holder can do by editing
+    // it is change the name shown back to themselves.
+    name: (userMetadata.name as string) ?? email.split('@')[0] ?? 'User',
+    role,
+    // Not `'active'`. That was an unverifiable claim, and asserting it meant a suspended
+    // account got a working interface until its first request came back rejected. There is
+    // no "unknown" in `UserStatus`, so this takes the value that grants least: anything
+    // that ever gates on `status === 'active'` fails closed until `/auth/me` answers.
+    status: 'pending',
     // Not in the JWT. Anything department-scoped waits for `/auth/me`.
     departmentId: null,
   };
